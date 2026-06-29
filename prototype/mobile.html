@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>鞋垫工厂手机报工</title>
+    <link rel="stylesheet" href="./mobile.css" />
+  </head>
+  <body>
+    <header class="mobile-header">
+      <div>
+        <div class="eyebrow">工人端</div>
+        <h1>今日待办</h1>
+      </div>
+      <a class="header-link" href="./index.html">管理端</a>
+    </header>
+
+    <main class="mobile-main">
+      <section class="quick-actions">
+        <button class="action-button primary-action" data-action="scan-work">扫工单码</button>
+        <button class="action-button" data-action="stock-in">扫码入库</button>
+        <button class="action-button" data-action="exception">报异常</button>
+      </section>
+
+      <section class="summary-strip">
+        <div>
+          <span class="summary-value">3</span>
+          <span class="summary-label">待办工序</span>
+        </div>
+        <div>
+          <span class="summary-value">72</span>
+          <span class="summary-label">今日完成</span>
+        </div>
+        <div>
+          <span class="summary-value">1</span>
+          <span class="summary-label">异常</span>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>我的工单</h2>
+          <span>按交期排序</span>
+        </div>
+        <div id="task-list" class="task-list"></div>
+      </section>
+
+      <section class="report-card" id="report-card">
+        <div class="section-head">
+          <h2>工序报工</h2>
+          <span id="selected-order-label">未选择</span>
+        </div>
+        <form id="mobile-report-form" class="mobile-form">
+          <label>
+            当前工序
+            <select id="report-stage"></select>
+          </label>
+          <div class="number-grid">
+            <label>
+              良品数
+              <input id="good-qty" type="number" min="0" inputmode="numeric" value="0" />
+            </label>
+            <label>
+              不良数
+              <input id="bad-qty" type="number" min="0" inputmode="numeric" value="0" />
+            </label>
+          </div>
+          <label>
+            异常备注
+            <textarea id="report-note" rows="3" placeholder="例如：缺料、设备调整、尺寸偏差"></textarea>
+          </label>
+          <button class="submit-button" type="submit">提交报工</button>
+        </form>
+      </section>
+
+      <section class="report-card">
+        <div class="section-head">
+          <h2>扫码入库</h2>
+          <span>物料批次</span>
+        </div>
+        <form id="stock-form" class="mobile-form">
+          <label>
+            物料批次
+            <select id="stock-batch"></select>
+          </label>
+          <div class="number-grid">
+            <label>
+              入库数量
+              <input type="number" min="0" inputmode="numeric" value="0" />
+            </label>
+            <label>
+              库位
+              <input type="text" value="A-01" />
+            </label>
+          </div>
+          <button class="secondary-submit" type="submit">提交入库</button>
+        </form>
+      </section>
+    </main>
+
+    <nav class="bottom-nav">
+      <button class="bottom-item active" data-scroll="task-list">工单</button>
+      <button class="bottom-item" data-scroll="report-card">报工</button>
+      <button class="bottom-item" data-scroll="stock-form">入库</button>
+    </nav>
+
+    <div class="toast" id="toast">已提交</div>
+
+    <script src="./mobile.js"></script>
+  </body>
+</html>

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>鞋垫工厂轻 MES 原型</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">M</div>
+          <div>
+            <div class="brand-title">Insole MES</div>
+            <div class="brand-subtitle">鞋垫打样与小批量生产</div>
+          </div>
+        </div>
+        <nav class="nav">
+          <button class="nav-item active" data-view="dashboard">总览</button>
+          <button class="nav-item" data-view="samples">样品单</button>
+          <button class="nav-item" data-view="orders">工单</button>
+          <button class="nav-item" data-view="materials">物料库存</button>
+          <button class="nav-item" data-view="reporting">报工台</button>
+          <button class="nav-item" data-view="alerts">预警中心</button>
+        </nav>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1 id="view-title">总览</h1>
+            <p id="view-subtitle">先把样品、工单、物料和进度抓在手里。</p>
+          </div>
+          <div class="topbar-actions">
+            <a class="ghost-btn link-btn" href="./mobile.html">手机端预览</a>
+            <button class="primary-btn">新建生产单</button>
+          </div>
+        </header>
+
+        <section class="view active" id="dashboard-view">
+          <div class="stats-grid" id="stats-grid"></div>
+          <div class="panel-grid two-up">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>今日重点工单</h2>
+                <span class="badge">实时</span>
+              </div>
+              <div id="focus-orders"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head">
+                <h2>缺料与风险</h2>
+                <span class="badge warn">优先处理</span>
+              </div>
+              <div id="risk-list"></div>
+            </section>
+          </div>
+          <div class="panel-grid two-up">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>工序进度</h2>
+                <span class="badge">车间状态</span>
+              </div>
+              <div id="stage-board"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head">
+                <h2>最近操作</h2>
+                <span class="badge">留痕</span>
+              </div>
+              <div id="activity-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="samples-view">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>样品单列表</h2>
+              <span class="badge">按项目追踪</span>
+            </div>
+            <div id="sample-table"></div>
+          </section>
+        </section>
+
+        <section class="view" id="orders-view">
+          <div class="panel-grid two-up">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>工单列表</h2>
+                <span class="badge">工单驱动</span>
+              </div>
+              <div id="order-table"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head">
+                <h2>工单详情</h2>
+                <span class="badge">当前选中</span>
+              </div>
+              <div id="order-detail"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="materials-view">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>物料库存</h2>
+                <span class="badge">批次库存</span>
+            </div>
+            <div id="material-table"></div>
+          </section>
+        </section>
+
+        <section class="view" id="reporting-view">
+          <div class="panel-grid two-up">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>待报工工序</h2>
+                <span class="badge">现场操作</span>
+              </div>
+              <div id="reporting-queue"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head">
+                <h2>快捷报工</h2>
+                <span class="badge">演示交互</span>
+              </div>
+              <form id="report-form" class="report-form">
+                <label>
+                  工单
+                  <select id="report-order"></select>
+                </label>
+                <label>
+                  工序
+                  <select id="report-stage"></select>
+                </label>
+                <label>
+                  操作
+                  <select id="report-action">
+                    <option value="start">开工</option>
+                    <option value="finish">完工</option>
+                    <option value="pause">暂停</option>
+                  </select>
+                </label>
+                <label>
+                  备注
+                  <input id="report-note" type="text" placeholder="例如：缺料、设备调整、已完成首件" />
+                </label>
+                <button class="primary-btn" type="submit">提交记录</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="alerts-view">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>预警中心</h2>
+              <span class="badge warn">先做能提醒你的事</span>
+            </div>
+            <div id="alerts-list"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
