@@ -50,9 +50,11 @@
             <p id="view-subtitle">先把样品、工单、物料和进度抓在手里。</p>
           </div>
           <div class="topbar-actions">
+            <div class="user-pill" id="current-user">未登录</div>
             <a class="ghost-btn link-btn" href="./mobile.html">手机端预览</a>
             <button class="ghost-btn" id="refresh-btn">刷新数据</button>
-            <button class="primary-btn" type="button">新建生产单</button>
+            <button class="primary-btn" id="new-order-btn" type="button">新建生产单</button>
+            <button class="ghost-btn" id="logout-btn" type="button">退出登录</button>
           </div>
         </header>
 
@@ -162,6 +164,7 @@
       </main>
     </div>
 
+    <div class="toast" id="toast">已处理</div>
     <script src="./admin.js"></script>
   </body>
 </html>

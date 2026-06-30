@@ -1,12 +1,23 @@
-const tokenKey = "insole_mes_alpha_token";
+const tokenKey = "insole_mes_alpha_token_mobile";
 
 const mobileState = {
   selectedOrderId: "",
+  currentUser: null,
   data: null,
+};
+
+const roleLabels = {
+  manager: "管理端",
+  worker: "工人",
+  warehouse: "仓库",
 };
 
 function token() {
   return localStorage.getItem(tokenKey);
+}
+
+function clearToken() {
+  localStorage.removeItem(tokenKey);
 }
 
 async function api(path, options = {}) {
@@ -26,6 +37,11 @@ async function api(path, options = {}) {
 function setLoggedIn(value) {
   document.getElementById("login-screen").classList.toggle("hidden", value);
   document.getElementById("mobile-app").classList.toggle("hidden", !value);
+}
+
+function renderUser() {
+  const user = mobileState.currentUser;
+  document.getElementById("current-user").textContent = user ? `${user.name} · ${roleLabels[user.role] || user.role}` : "未登录";
 }
 
 function currentOrder() {
@@ -115,10 +131,27 @@ async function loadState() {
   renderAll();
 }
 
+async function loadSession() {
+  const result = await api("/api/me");
+  mobileState.currentUser = result.user;
+  renderUser();
+  await loadState();
+}
+
+function logout() {
+  clearToken();
+  mobileState.currentUser = null;
+  mobileState.data = null;
+  document.getElementById("login-error").textContent = "";
+  renderUser();
+  setLoggedIn(false);
+}
+
 function bindEvents() {
   document.getElementById("login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
+      document.getElementById("login-error").textContent = "";
       const result = await api("/api/login", {
         method: "POST",
         body: JSON.stringify({
@@ -127,12 +160,16 @@ function bindEvents() {
         }),
       });
       localStorage.setItem(tokenKey, result.token);
+      mobileState.currentUser = result.user;
       setLoggedIn(true);
+      renderUser();
       await loadState();
     } catch (error) {
       document.getElementById("login-error").textContent = error.message;
     }
   });
+
+  document.getElementById("logout-btn").addEventListener("click", logout);
 
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -195,8 +232,9 @@ function bindEvents() {
 }
 
 bindEvents();
+renderUser();
 
 if (token()) {
   setLoggedIn(true);
-  loadState().catch(() => setLoggedIn(false));
+  loadSession().catch(() => logout());
 }

@@ -1,8 +1,9 @@
-const tokenKey = "insole_mes_alpha_token";
+const tokenKey = "insole_mes_alpha_token_admin";
 
 const state = {
   currentView: "dashboard",
   selectedOrderId: "",
+  currentUser: null,
   data: null,
 };
 
@@ -15,8 +16,18 @@ const views = {
   alerts: { title: "预警中心", subtitle: "优先盯缺料、临期批次、延期和暂停异常。" },
 };
 
+const roleLabels = {
+  manager: "管理端",
+  worker: "工人",
+  warehouse: "仓库",
+};
+
 function token() {
   return localStorage.getItem(tokenKey);
+}
+
+function clearToken() {
+  localStorage.removeItem(tokenKey);
 }
 
 async function api(path, options = {}) {
@@ -36,6 +47,18 @@ async function api(path, options = {}) {
 function setLoggedIn(value) {
   document.getElementById("login-screen").classList.toggle("hidden", value);
   document.getElementById("app-shell").classList.toggle("hidden", !value);
+}
+
+function showToast(message) {
+  const toast = document.getElementById("toast");
+  toast.textContent = message;
+  toast.classList.add("show");
+  window.setTimeout(() => toast.classList.remove("show"), 1800);
+}
+
+function renderUser() {
+  const user = state.currentUser;
+  document.getElementById("current-user").textContent = user ? `${user.name} · ${roleLabels[user.role] || user.role}` : "未登录";
 }
 
 function normalizeStatus(status) {
@@ -99,17 +122,23 @@ function renderDashboard() {
       note: `当前 ${item.stockQty} ${item.unit} / 安全库存 ${item.safetyQty} ${item.unit}`,
       label: "低库存",
     }));
-  const alertRisks = state.data.alerts.filter((item) => item.status === "open").map((item) => ({ title: item.title, meta: "系统预警", note: item.text, label: "预警" }));
-  renderList("risk-list", [...materialRisks, ...alertRisks].slice(0, 6), (item) => `
-    <div class="list-item">
-      <div class="item-top">
-        <div class="item-title">${item.title}</div>
-        <span class="status warn">${item.label}</span>
+  const alertRisks = state.data.alerts
+    .filter((item) => item.status === "open")
+    .map((item) => ({ title: item.title, meta: "系统预警", note: item.text, label: "预警" }));
+  renderList(
+    "risk-list",
+    [...materialRisks, ...alertRisks].slice(0, 6),
+    (item) => `
+      <div class="list-item">
+        <div class="item-top">
+          <div class="item-title">${item.title}</div>
+          <span class="status warn">${item.label}</span>
+        </div>
+        <div class="item-meta">${item.meta}</div>
+        <div class="item-note">${item.note}</div>
       </div>
-      <div class="item-meta">${item.meta}</div>
-      <div class="item-note">${item.note}</div>
-    </div>
-  `);
+    `
+  );
 
   renderList("stage-board", state.data.workOrders, (order) => {
     const nextStage = order.route.find((step) => step.status === "待开始")?.name || "待完工";
@@ -124,13 +153,17 @@ function renderDashboard() {
     `;
   });
 
-  renderList("activity-list", state.data.activities, (item) => `
-    <div class="list-item">
-      <div class="item-top"><div class="item-title">${item.title}</div></div>
-      <div class="item-meta">${item.meta || ""}</div>
-      <div class="item-note">${item.note || ""}</div>
-    </div>
-  `);
+  renderList(
+    "activity-list",
+    state.data.activities,
+    (item) => `
+      <div class="list-item">
+        <div class="item-top"><div class="item-title">${item.title}</div></div>
+        <div class="item-meta">${item.meta || ""}</div>
+        <div class="item-note">${item.note || ""}</div>
+      </div>
+    `
+  );
 }
 
 function renderSamples() {
@@ -247,15 +280,19 @@ function renderMaterials() {
 }
 
 function renderReporting() {
-  renderList("reporting-queue", state.data.workOrders, (order) => `
-    <div class="list-item">
-      <div class="item-top">
-        <div class="item-title">${order.id} · ${order.product}</div>
-        <span class="status ${normalizeStatus(order.status)}">${order.currentProcess}</span>
+  renderList(
+    "reporting-queue",
+    state.data.workOrders,
+    (order) => `
+      <div class="list-item">
+        <div class="item-top">
+          <div class="item-title">${order.id} · ${order.product}</div>
+          <span class="status ${normalizeStatus(order.status)}">${order.currentProcess}</span>
+        </div>
+        <div class="item-meta">优先级 ${order.priority} · 当前完成 ${order.doneQty}/${order.plannedQty}</div>
       </div>
-      <div class="item-meta">优先级 ${order.priority} · 当前完成 ${order.doneQty}/${order.plannedQty}</div>
-    </div>
-  `);
+    `
+  );
 
   document.getElementById("report-table").innerHTML = `
     <div class="table">
@@ -310,12 +347,33 @@ async function loadState() {
   renderAll();
 }
 
+async function loadSession() {
+  const result = await api("/api/me");
+  state.currentUser = result.user;
+  renderUser();
+  await loadState();
+}
+
+function logout() {
+  clearToken();
+  state.currentUser = null;
+  state.data = null;
+  document.getElementById("login-error").textContent = "";
+  renderUser();
+  setLoggedIn(false);
+}
+
 function bindEvents() {
   document.querySelectorAll(".nav-item").forEach((item) => item.addEventListener("click", () => setView(item.getAttribute("data-view"))));
   document.getElementById("refresh-btn").addEventListener("click", loadState);
+  document.getElementById("logout-btn").addEventListener("click", logout);
+  document.getElementById("new-order-btn").addEventListener("click", () => {
+    showToast("V1 先把工单流程跑通，下一步再接新建生产单表单。");
+  });
   document.getElementById("login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
+      document.getElementById("login-error").textContent = "";
       const result = await api("/api/login", {
         method: "POST",
         body: JSON.stringify({
@@ -324,7 +382,9 @@ function bindEvents() {
         }),
       });
       localStorage.setItem(tokenKey, result.token);
+      state.currentUser = result.user;
       setLoggedIn(true);
+      renderUser();
       await loadState();
     } catch (error) {
       document.getElementById("login-error").textContent = error.message;
@@ -333,8 +393,9 @@ function bindEvents() {
 }
 
 bindEvents();
+renderUser();
 
 if (token()) {
   setLoggedIn(true);
-  loadState().catch(() => setLoggedIn(false));
+  loadSession().catch(() => logout());
 }

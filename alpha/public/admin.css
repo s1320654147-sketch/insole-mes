@@ -171,7 +171,21 @@ select {
 
 .topbar-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
+}
+
+.user-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .primary-btn,
@@ -199,6 +213,26 @@ select {
 
 .link-btn {
   text-decoration: none;
+}
+
+.toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 20;
+  transform: translateY(16px);
+  opacity: 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #111827;
+  color: #fff;
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.toast.show {
+  transform: translateY(0);
+  opacity: 1;
 }
 
 .view {
@@ -512,6 +546,12 @@ select {
 
   .topbar-actions button {
     flex: 1;
+  }
+
+  .user-pill,
+  .topbar-actions .link-btn {
+    flex: 1 1 calc(50% - 10px);
+    justify-content: center;
   }
 
   .table-head,

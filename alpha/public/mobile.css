@@ -127,6 +127,7 @@ h2 {
 .header-link {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   height: 36px;
   padding: 0 12px;
   border: 1px solid var(--border);
@@ -135,6 +136,26 @@ h2 {
   background: #fff;
   text-decoration: none;
   font-size: 14px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.user-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .mobile-main {
