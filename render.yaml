@@ -9,6 +9,7 @@ services:
   - type: web
     name: insole-mes-alpha
     runtime: node
+    plan: free
     rootDir: ./alpha
     buildCommand: npm install
     startCommand: npm start
@@ -25,5 +26,6 @@ services:
 
 databases:
   - name: insole-mes-db
+    plan: free
     databaseName: insole_mes
     user: insole_mes_user
