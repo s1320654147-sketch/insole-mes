@@ -32,7 +32,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -176,6 +177,13 @@ select {
   gap: 10px;
 }
 
+.panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .user-pill {
   display: inline-flex;
   align-items: center;
@@ -209,6 +217,12 @@ select {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
+}
+
+.slim-btn {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
 }
 
 .link-btn {
@@ -428,6 +442,11 @@ select {
 
 .table-row.clickable {
   cursor: pointer;
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  font: inherit;
 }
 
 .table-row.clickable.active {
@@ -447,11 +466,29 @@ select {
   grid-template-columns: 0.9fr 1.2fr 0.8fr 0.8fr 0.8fr 0.8fr;
 }
 
+.material-layout {
+  align-items: start;
+}
+
+.code-block {
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
 .report-grid {
   grid-template-columns: 1fr 1fr 0.7fr 0.7fr 1.2fr 0.8fr;
 }
 
 .detail-card {
+  display: grid;
+  gap: 14px;
+}
+
+.detail-stack {
   display: grid;
   gap: 14px;
 }
@@ -484,12 +521,14 @@ select {
   border: 1px solid var(--border);
 }
 
-.report-form {
+.report-form,
+.editor-form {
   display: grid;
   gap: 14px;
 }
 
-.report-form label {
+.report-form label,
+.editor-form label {
   display: grid;
   gap: 6px;
   color: var(--muted);
@@ -497,13 +536,55 @@ select {
 }
 
 .report-form input,
-.report-form select {
+.report-form select,
+.editor-form input,
+.editor-form select,
+.editor-form textarea {
   height: 40px;
   padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
   color: var(--text);
+}
+
+.editor-form textarea {
+  min-height: 126px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.editor-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.editor-grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.editor-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.editor-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.helper-text {
+  margin: -6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.empty-state {
+  padding: 18px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
 }
 
 .alert-card {
@@ -527,6 +608,11 @@ select {
 
   .stats-grid,
   .two-up {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-grid.two,
+  .editor-grid.three {
     grid-template-columns: 1fr;
   }
 }

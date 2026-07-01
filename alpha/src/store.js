@@ -10,6 +10,101 @@ function makeId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
+function makeBusinessId(prefix, existingIds = []) {
+  const date = new Date().toISOString().slice(2, 10).replace(/-/g, "");
+  let seq = 1;
+  let nextId = `${prefix}-${date}-${String(seq).padStart(2, "0")}`;
+  const used = new Set(existingIds);
+  while (used.has(nextId)) {
+    seq += 1;
+    nextId = `${prefix}-${date}-${String(seq).padStart(2, "0")}`;
+  }
+  return nextId;
+}
+
+function defaultRoute() {
+  return [
+    { name: "备料", status: "待开始" },
+    { name: "裁切 / 开料", status: "待开始" },
+    { name: "成型 / 压制", status: "待开始" },
+    { name: "修边", status: "待开始" },
+    { name: "检验", status: "待开始" },
+    { name: "包装 / 入库", status: "待开始" },
+  ];
+}
+
+function normalizeRoute(routeInput) {
+  const source = Array.isArray(routeInput) ? routeInput : [];
+  const route = source
+    .map((step) => ({
+      name: String(step?.name || "").trim(),
+      status: String(step?.status || "待开始").trim() || "待开始",
+    }))
+    .filter((step) => step.name);
+  return route.length ? route : defaultRoute();
+}
+
+function normalizeSampleInput(input, fallback = {}) {
+  return {
+    name: String(input.name || fallback.name || "").trim(),
+    customer: String(input.customer || fallback.customer || "").trim(),
+    version: String(input.version || fallback.version || "").trim(),
+    owner: String(input.owner || fallback.owner || "").trim(),
+    dueDate: String(input.dueDate || fallback.dueDate || "").trim(),
+    status: String(input.status || fallback.status || "待打样").trim() || "待打样",
+  };
+}
+
+function normalizeOrderInput(input, fallback = {}) {
+  const route = normalizeRoute(input.route ?? fallback.route);
+  const currentProcess = String(input.currentProcess || fallback.currentProcess || route[0]?.name || "待领料").trim();
+  return {
+    sampleId: String(input.sampleId || fallback.sampleId || "").trim(),
+    product: String(input.product || fallback.product || "").trim(),
+    plannedQty: Number(input.plannedQty ?? fallback.plannedQty ?? 0),
+    doneQty: Number(input.doneQty ?? fallback.doneQty ?? 0),
+    currentProcess,
+    priority: String(input.priority || fallback.priority || "中").trim() || "中",
+    status: String(input.status || fallback.status || "待领料").trim() || "待领料",
+    dueAt: String(input.dueAt || fallback.dueAt || "").trim(),
+    route,
+  };
+}
+
+function assertSampleInput(sample) {
+  if (!sample.name) throw new Error("样品名称不能为空");
+  if (!sample.owner) throw new Error("负责人不能为空");
+  if (!sample.dueDate) throw new Error("样品截止日期不能为空");
+}
+
+function assertOrderInput(order) {
+  if (!order.product) throw new Error("产品名称不能为空");
+  if (!Number.isFinite(order.plannedQty) || order.plannedQty <= 0) throw new Error("计划数量必须大于 0");
+  if (!order.currentProcess) throw new Error("当前工序不能为空");
+  if (!order.dueAt) throw new Error("交期不能为空");
+  if (!order.route.length) throw new Error("至少需要 1 个工序");
+}
+
+function normalizeStockMovementInput(input, fallback = {}) {
+  return {
+    materialCode: String(input.materialCode || fallback.materialCode || "").trim(),
+    batchNo: String(input.batchNo || fallback.batchNo || "").trim(),
+    type: input.type === "out" ? "out" : "in",
+    qty: Number(input.qty ?? fallback.qty ?? 0),
+    location: String(input.location || fallback.location || "").trim(),
+    note: String(input.note || fallback.note || "").trim(),
+  };
+}
+
+function assertStockMovementInput(movement, availableQty = Number.POSITIVE_INFINITY) {
+  if (!movement.materialCode) throw new Error("物料料号不能为空");
+  if (!movement.batchNo) throw new Error("物料批次不能为空");
+  if (!Number.isFinite(movement.qty) || movement.qty <= 0) throw new Error("出入库数量必须大于 0");
+  if (movement.type === "out" && movement.qty > Number(availableQty || 0)) {
+    throw new Error("出库数量不能大于当前库存");
+  }
+}
+
 function normalizeState(data) {
   return {
     users: data.users || [],
@@ -40,6 +135,55 @@ function serializePublicState(data) {
       { label: "今日报工次数", value: state.reports.length },
     ],
   };
+}
+
+function serializeStateForRole(data, role) {
+  const state = normalizeState(data);
+  if (role === "manager") {
+    return serializePublicState(state);
+  }
+
+  if (role === "worker") {
+    const workOrders = state.workOrders.filter((item) => item.status !== "已完成");
+    const alerts = state.alerts.filter((item) => item.status === "open");
+    const reports = state.reports.slice(0, 20);
+    return {
+      samples: [],
+      workOrders,
+      materials: [],
+      reports,
+      stockMovements: [],
+      activities: state.activities.slice(0, 12),
+      alerts,
+      stats: [
+        { label: "待办工单", value: workOrders.length },
+        { label: "异常预警", value: alerts.length },
+        { label: "报工记录", value: reports.length },
+      ],
+    };
+  }
+
+  if (role === "warehouse") {
+    const materials = state.materials;
+    const alerts = state.alerts.filter((item) => item.status === "open");
+    const stockMovements = state.stockMovements.slice(0, 30);
+    return {
+      samples: [],
+      workOrders: [],
+      materials,
+      reports: [],
+      stockMovements,
+      activities: state.activities.slice(0, 12),
+      alerts,
+      stats: [
+        { label: "批次物料", value: materials.length },
+        { label: "库存预警", value: alerts.length },
+        { label: "出入库记录", value: stockMovements.length },
+      ],
+    };
+  }
+
+  return serializePublicState(state);
 }
 
 export async function createStore(rootDir) {
@@ -79,8 +223,80 @@ async function createFileStore(rootDir) {
       if (!user) return null;
       return { id: user.id, name: user.name, role: user.role };
     },
-    async getState() {
-      return serializePublicState(await readState());
+    async getState(role = "manager") {
+      return serializeStateForRole(await readState(), role);
+    },
+    async createSample(input) {
+      const state = await readState();
+      const sample = normalizeSampleInput(input);
+      assertSampleInput(sample);
+      const next = {
+        id: input.id?.trim() || makeBusinessId("SP", state.samples.map((item) => item.id)),
+        ...sample,
+      };
+      state.samples.unshift(next);
+      state.activities.unshift({
+        id: makeId("act"),
+        title: `${next.id} 已新建`,
+        meta: `${input.operator} · 刚刚`,
+        note: `${next.name} / ${next.customer || "未填写客户"} · ${next.status}`,
+        createdAt: new Date().toISOString(),
+      });
+      await writeState(state);
+      return { sample: next, state: serializePublicState(state) };
+    },
+    async updateSample(sampleId, input) {
+      const state = await readState();
+      const sample = state.samples.find((item) => item.id === sampleId);
+      if (!sample) throw new Error("样品单不存在");
+      const next = normalizeSampleInput(input, sample);
+      assertSampleInput(next);
+      Object.assign(sample, next);
+      state.activities.unshift({
+        id: makeId("act"),
+        title: `${sample.id} 已更新`,
+        meta: `${input.operator} · 刚刚`,
+        note: `${sample.name} / ${sample.version || "未填写版本"} / ${sample.status}`,
+        createdAt: new Date().toISOString(),
+      });
+      await writeState(state);
+      return { sample, state: serializePublicState(state) };
+    },
+    async createWorkOrder(input) {
+      const state = await readState();
+      const order = normalizeOrderInput(input);
+      assertOrderInput(order);
+      const next = {
+        id: input.id?.trim() || makeBusinessId("WO", state.workOrders.map((item) => item.id)),
+        ...order,
+      };
+      state.workOrders.unshift(next);
+      state.activities.unshift({
+        id: makeId("act"),
+        title: `${next.id} 已新建`,
+        meta: `${input.operator} · 刚刚`,
+        note: `${next.product} · ${next.plannedQty} 双 · ${next.currentProcess}`,
+        createdAt: new Date().toISOString(),
+      });
+      await writeState(state);
+      return { workOrder: next, state: serializePublicState(state) };
+    },
+    async updateWorkOrder(workOrderId, input) {
+      const state = await readState();
+      const order = state.workOrders.find((item) => item.id === workOrderId);
+      if (!order) throw new Error("工单不存在");
+      const next = normalizeOrderInput(input, order);
+      assertOrderInput(next);
+      Object.assign(order, next);
+      state.activities.unshift({
+        id: makeId("act"),
+        title: `${order.id} 已更新`,
+        meta: `${input.operator} · 刚刚`,
+        note: `${order.product} · ${order.status} · ${order.currentProcess}`,
+        createdAt: new Date().toISOString(),
+      });
+      await writeState(state);
+      return { workOrder: order, state: serializePublicState(state) };
     },
     async createReport(input) {
       const state = await readState();
@@ -122,20 +338,23 @@ async function createFileStore(rootDir) {
     },
     async createStockMovement(input) {
       const state = await readState();
-      const material = state.materials.find((item) => item.code === input.materialCode && item.batchNo === input.batchNo);
+      const movementInput = normalizeStockMovementInput(input);
+      const material = state.materials.find((item) => item.code === movementInput.materialCode && item.batchNo === movementInput.batchNo);
       if (!material) throw new Error("物料批次不存在");
-      const qty = Number(input.qty || 0);
-      const sign = input.type === "out" ? -1 : 1;
-      material.stockQty = Number(material.stockQty || 0) + sign * qty;
-      if (input.location) material.location = input.location;
+      assertStockMovementInput(movementInput, material.stockQty);
+      const qty = movementInput.qty;
+      const sign = movementInput.type === "out" ? -1 : 1;
+      const nextQty = Number(material.stockQty || 0) + sign * qty;
+      material.stockQty = nextQty;
+      if (movementInput.location) material.location = movementInput.location;
       const movement = {
         id: makeId("stk"),
-        materialCode: input.materialCode,
-        batchNo: input.batchNo,
-        type: input.type || "in",
+        materialCode: movementInput.materialCode,
+        batchNo: movementInput.batchNo,
+        type: movementInput.type,
         qty,
-        location: input.location || material.location,
-        note: input.note || "",
+        location: movementInput.location || material.location,
+        note: movementInput.note,
         operator: input.operator,
         createdAt: new Date().toISOString(),
       };
@@ -147,7 +366,7 @@ async function createFileStore(rootDir) {
         note: `${movement.batchNo} · ${qty}${material.unit} · ${movement.location}`,
         createdAt: movement.createdAt,
       });
-      if (material.stockQty < material.safetyQty) {
+      if (nextQty < material.safetyQty) {
         state.alerts.unshift({
           id: makeId("al"),
           title: `${material.name} 库存不足`,
@@ -175,8 +394,101 @@ async function createPostgresStore() {
       const result = await pool.query("select id, name, role from app_users where username=$1 and password=$2 limit 1", [username, password]);
       return result.rows[0] || null;
     },
-    async getState() {
-      return serializePublicState(await readPostgresState(pool));
+    async getState(role = "manager") {
+      return serializeStateForRole(await readPostgresState(pool), role);
+    },
+    async createSample(input) {
+      const state = await readPostgresState(pool);
+      const sample = normalizeSampleInput(input);
+      assertSampleInput(sample);
+      const next = {
+        id: input.id?.trim() || makeBusinessId("SP", state.samples.map((item) => item.id)),
+        ...sample,
+      };
+      await pool.query("insert into samples(id,name,customer,version,owner,due_date,status) values($1,$2,$3,$4,$5,$6,$7)", [
+        next.id,
+        next.name,
+        next.customer,
+        next.version,
+        next.owner,
+        next.dueDate,
+        next.status,
+      ]);
+      await pool.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
+        makeId("act"),
+        `${next.id} 已新建`,
+        `${input.operator} · 刚刚`,
+        `${next.name} / ${next.customer || "未填写客户"} · ${next.status}`,
+        new Date().toISOString(),
+      ]);
+      return { sample: next, state: serializePublicState(await readPostgresState(pool)) };
+    },
+    async updateSample(sampleId, input) {
+      const existing = await pool.query('select id, name, customer, version, owner, due_date as "dueDate", status from samples where id=$1 limit 1', [sampleId]);
+      const sample = existing.rows[0];
+      if (!sample) throw new Error("样品单不存在");
+      const next = normalizeSampleInput(input, sample);
+      assertSampleInput(next);
+      await pool.query("update samples set name=$1, customer=$2, version=$3, owner=$4, due_date=$5, status=$6 where id=$7", [
+        next.name,
+        next.customer,
+        next.version,
+        next.owner,
+        next.dueDate,
+        next.status,
+        sampleId,
+      ]);
+      await pool.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
+        makeId("act"),
+        `${sampleId} 已更新`,
+        `${input.operator} · 刚刚`,
+        `${next.name} / ${next.version || "未填写版本"} / ${next.status}`,
+        new Date().toISOString(),
+      ]);
+      return { sample: { id: sampleId, ...next }, state: serializePublicState(await readPostgresState(pool)) };
+    },
+    async createWorkOrder(input) {
+      const state = await readPostgresState(pool);
+      const order = normalizeOrderInput(input);
+      assertOrderInput(order);
+      const next = {
+        id: input.id?.trim() || makeBusinessId("WO", state.workOrders.map((item) => item.id)),
+        ...order,
+      };
+      await pool.query(
+        "insert into work_orders(id,sample_id,product,planned_qty,done_qty,current_process,priority,status,due_at,route) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+        [next.id, next.sampleId, next.product, next.plannedQty, next.doneQty, next.currentProcess, next.priority, next.status, next.dueAt, JSON.stringify(next.route)]
+      );
+      await pool.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
+        makeId("act"),
+        `${next.id} 已新建`,
+        `${input.operator} · 刚刚`,
+        `${next.product} · ${next.plannedQty} 双 · ${next.currentProcess}`,
+        new Date().toISOString(),
+      ]);
+      return { workOrder: next, state: serializePublicState(await readPostgresState(pool)) };
+    },
+    async updateWorkOrder(workOrderId, input) {
+      const existing = await pool.query(
+        'select id, sample_id as "sampleId", product, planned_qty as "plannedQty", done_qty as "doneQty", current_process as "currentProcess", priority, status, due_at as "dueAt", route from work_orders where id=$1 limit 1',
+        [workOrderId]
+      );
+      const order = existing.rows[0];
+      if (!order) throw new Error("工单不存在");
+      const next = normalizeOrderInput(input, order);
+      assertOrderInput(next);
+      await pool.query(
+        "update work_orders set sample_id=$1, product=$2, planned_qty=$3, done_qty=$4, current_process=$5, priority=$6, status=$7, due_at=$8, route=$9 where id=$10",
+        [next.sampleId, next.product, next.plannedQty, next.doneQty, next.currentProcess, next.priority, next.status, next.dueAt, JSON.stringify(next.route), workOrderId]
+      );
+      await pool.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
+        makeId("act"),
+        `${workOrderId} 已更新`,
+        `${input.operator} · 刚刚`,
+        `${next.product} · ${next.status} · ${next.currentProcess}`,
+        new Date().toISOString(),
+      ]);
+      return { workOrder: { id: workOrderId, ...next }, state: serializePublicState(await readPostgresState(pool)) };
     },
     async createReport(input) {
       const client = await pool.connect();
@@ -232,24 +544,26 @@ async function createPostgresStore() {
       const client = await pool.connect();
       try {
         await client.query("begin");
-        const result = await client.query("select * from materials where code=$1 and batch_no=$2 for update", [input.materialCode, input.batchNo]);
+        const movementInput = normalizeStockMovementInput(input);
+        const result = await client.query("select * from materials where code=$1 and batch_no=$2 for update", [movementInput.materialCode, movementInput.batchNo]);
         const material = result.rows[0];
         if (!material) throw new Error("物料批次不存在");
-        const qty = Number(input.qty || 0);
-        const sign = input.type === "out" ? -1 : 1;
+        assertStockMovementInput(movementInput, material.stock_qty);
+        const qty = movementInput.qty;
+        const sign = movementInput.type === "out" ? -1 : 1;
         const nextQty = Number(material.stock_qty) + sign * qty;
         const movement = {
           id: makeId("stk"),
-          materialCode: input.materialCode,
-          batchNo: input.batchNo,
-          type: input.type || "in",
+          materialCode: movementInput.materialCode,
+          batchNo: movementInput.batchNo,
+          type: movementInput.type,
           qty,
-          location: input.location || material.location,
-          note: input.note || "",
+          location: movementInput.location || material.location,
+          note: movementInput.note,
           operator: input.operator,
           createdAt: new Date().toISOString(),
         };
-        await client.query("update materials set stock_qty=$1, location=$2 where code=$3 and batch_no=$4", [nextQty, movement.location, input.materialCode, input.batchNo]);
+        await client.query("update materials set stock_qty=$1, location=$2 where code=$3 and batch_no=$4", [nextQty, movement.location, movementInput.materialCode, movementInput.batchNo]);
         await client.query(
           "insert into stock_movements(id, material_code, batch_no, type, qty, location, note, operator, created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9)",
           [movement.id, movement.materialCode, movement.batchNo, movement.type, movement.qty, movement.location, movement.note, movement.operator, movement.createdAt]

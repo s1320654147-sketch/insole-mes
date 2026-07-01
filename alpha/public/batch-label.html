@@ -1,0 +1,272 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>批次标签</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #eef2f6;
+        --surface: #ffffff;
+        --border: #d6dee8;
+        --text: #111827;
+        --muted: #64748b;
+        --primary: #2563eb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      .page {
+        width: min(100%, 920px);
+        margin: 0 auto;
+        display: grid;
+        gap: 18px;
+      }
+      .topbar,
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+      .topbar {
+        padding: 18px 20px;
+      }
+      .eyebrow {
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      h1 {
+        margin: 8px 0 6px;
+        font-size: 28px;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 18px;
+      }
+      .card {
+        padding: 18px;
+        display: grid;
+        gap: 14px;
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .meta-item {
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #f8fafc;
+      }
+      .meta-label {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .meta-value {
+        font-size: 16px;
+        font-weight: 700;
+        word-break: break-word;
+      }
+      .code-block {
+        padding: 14px;
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        background: #fff;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        word-break: break-all;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 0 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--text);
+        text-decoration: none;
+        cursor: pointer;
+        font: inherit;
+      }
+      .button.primary {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: #fff;
+      }
+      .qr-wrap {
+        display: grid;
+        place-items: center;
+        min-height: 300px;
+        padding: 16px;
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        background: #fff;
+      }
+      .qr-wrap img {
+        width: min(100%, 260px);
+        height: auto;
+      }
+      .tips {
+        display: grid;
+        gap: 8px;
+        padding-left: 18px;
+        margin: 0;
+        color: var(--text);
+      }
+      .warn {
+        color: #92400e;
+        background: #fff7ed;
+        border: 1px solid #fdba74;
+        padding: 12px 14px;
+        border-radius: 8px;
+      }
+      @media print {
+        body { background: #fff; padding: 0; }
+        .topbar, .warn, .actions, .tips-card { display: none !important; }
+        .page { width: 100%; }
+        .grid { grid-template-columns: 1fr 1fr; }
+        .card { border: 1px solid #bbb; }
+      }
+      @media (max-width: 760px) {
+        body { padding: 14px; }
+        .grid, .meta-grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <section class="topbar">
+        <div class="eyebrow">Insole MES Alpha</div>
+        <h1>批次标签 / 扫码入口</h1>
+        <p>这页是给原材料箱、周转袋、流转卡用的。先生成批次，再贴标签；仓库或工人再扫码进入移动端。</p>
+      </section>
+
+      <div class="warn" id="local-note">如果当前链接是 localhost，这个二维码更适合本机演示。真机扫码要换成局域网地址或正式线上域名。</div>
+
+      <section class="grid">
+        <article class="card">
+          <div class="meta-grid" id="meta-grid"></div>
+          <div>
+            <div class="meta-label">批次码</div>
+            <div class="code-block" id="batch-code"></div>
+          </div>
+          <div>
+            <div class="meta-label">移动端扫码链接</div>
+            <div class="code-block" id="batch-link"></div>
+          </div>
+          <div class="actions">
+            <button class="button" id="copy-code-btn" type="button">复制批次码</button>
+            <button class="button" id="copy-link-btn" type="button">复制扫码链接</button>
+            <a class="button primary" id="open-mobile-link" href="#">打开移动端页</a>
+            <button class="button" id="print-btn" type="button">打印标签</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="meta-label">二维码预览</div>
+          <div class="qr-wrap" id="qr-wrap">
+            <img id="qr-image" alt="批次二维码" />
+            <div id="qr-fallback" class="code-block" style="display:none;">当前无法加载二维码图片，请先复制扫码链接或批次码使用。</div>
+          </div>
+          <p>演示版二维码图片调用公开二维码生成服务。后续做正式版时，建议把二维码生成放到你自己的前端或后端里，不依赖外部服务。</p>
+        </article>
+      </section>
+
+      <article class="card tips-card">
+        <div class="meta-label">建议的实际业务逻辑</div>
+        <ol class="tips">
+          <li>先在管理端建立原材料批次，系统生成唯一批次码。</li>
+          <li>把批次标签打印出来，贴到物料箱、包装袋或周转卡上。</li>
+          <li>仓库到货时可扫码直接进入入库页；领料或退料时也扫同一张码。</li>
+          <li>工人如果只处理工单，也可以扫工单码；原材料码主要服务仓库和备料环节。</li>
+        </ol>
+      </article>
+    </div>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const batch = String(params.get('batch') || '').trim();
+      const parts = batch.split('|');
+      const materialCode = parts[1] || '-';
+      const batchNo = parts[2] || '-';
+      const location = parts.slice(3).join('|') || '-';
+      const mobileLink = `${window.location.origin}/mobile.html?batch=${encodeURIComponent(batch)}`;
+      const qrService = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(mobileLink)}`;
+
+      const metaItems = [
+        ['料号', materialCode],
+        ['批次', batchNo],
+        ['库位', location],
+        ['标签用途', '原材料收发 / 批次追溯'],
+      ];
+
+      document.getElementById('meta-grid').innerHTML = metaItems.map(([label, value]) => `
+        <div class="meta-item">
+          <span class="meta-label">${label}</span>
+          <div class="meta-value">${value || '-'}</div>
+        </div>
+      `).join('');
+
+      document.getElementById('batch-code').textContent = batch || '未传入批次码';
+      document.getElementById('batch-link').textContent = batch ? mobileLink : '未生成';
+      document.getElementById('open-mobile-link').href = batch ? mobileLink : '#';
+      document.getElementById('open-mobile-link').target = '_blank';
+      document.getElementById('open-mobile-link').rel = 'noreferrer';
+
+      if (/^https?:\/\/(localhost|127\.0\.0\.1)/i.test(window.location.origin)) {
+        document.getElementById('local-note').style.display = 'block';
+      } else {
+        document.getElementById('local-note').style.display = 'none';
+      }
+
+      const qrImage = document.getElementById('qr-image');
+      const qrFallback = document.getElementById('qr-fallback');
+      if (batch) {
+        qrImage.src = qrService;
+        qrImage.onerror = () => {
+          qrImage.style.display = 'none';
+          qrFallback.style.display = 'block';
+        };
+      } else {
+        qrImage.style.display = 'none';
+        qrFallback.style.display = 'block';
+      }
+
+      document.getElementById('copy-code-btn').addEventListener('click', async () => {
+        if (!batch) return;
+        await navigator.clipboard.writeText(batch);
+      });
+
+      document.getElementById('copy-link-btn').addEventListener('click', async () => {
+        if (!batch) return;
+        await navigator.clipboard.writeText(mobileLink);
+      });
+
+      document.getElementById('print-btn').addEventListener('click', () => {
+        window.print();
+      });
+    </script>
+  </body>
+</html>

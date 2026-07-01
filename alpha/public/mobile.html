@@ -1,16 +1,16 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>鞋垫工厂手机报工 Alpha</title>
+    <title>鞋垫工厂移动端 Alpha</title>
     <link rel="stylesheet" href="./mobile.css" />
   </head>
   <body>
     <div class="login-screen" id="login-screen">
       <form class="login-card" id="login-form">
         <div class="brand-line">Insole MES Alpha</div>
-        <h1>工人端登录</h1>
+        <h1 id="login-title">移动端登录</h1>
         <label>
           账号
           <input id="username" autocomplete="username" value="worker" />
@@ -27,37 +27,48 @@
     <div class="mobile-app hidden" id="mobile-app">
       <header class="mobile-header">
         <div>
-          <div class="eyebrow">工人端</div>
-          <h1>今日待办</h1>
+          <div class="eyebrow" id="app-eyebrow">移动端</div>
+          <h1 id="app-title">今日待办</h1>
         </div>
         <div class="header-actions">
           <div class="user-pill" id="current-user">未登录</div>
-          <a class="header-link" href="./admin.html">管理端</a>
+          <a class="header-link" id="admin-link" href="./admin.html">管理端</a>
           <button class="header-link" id="logout-btn" type="button">退出</button>
         </div>
       </header>
 
       <main class="mobile-main">
-        <section class="quick-actions">
-          <button class="action-button primary-action" data-action="scan-work">扫工单码</button>
-          <button class="action-button" data-action="stock-in">扫码入库</button>
-          <button class="action-button" data-action="exception">报异常</button>
+        <section class="role-banner" id="role-banner"></section>
+
+        <section class="quick-actions" id="quick-actions-section">
+          <button class="action-button primary-action" id="action-primary" data-action="scan-work">扫码接单</button>
+          <button class="action-button" id="action-secondary" data-action="exception">异常上报</button>
+          <button class="action-button" id="action-tertiary" data-action="stock-in">扫码入库</button>
         </section>
 
         <section class="summary-strip" id="summary-strip"></section>
 
-        <section>
+        <section id="tasks-section">
           <div class="section-head">
-            <h2>我的工单</h2>
-            <span>按交期排序</span>
+            <h2 id="tasks-title">我的工单</h2>
+            <span id="tasks-meta">按交期排序</span>
           </div>
           <div id="task-list" class="task-list"></div>
         </section>
 
-        <section class="report-card" id="report-card">
+        <section class="report-card" id="report-section">
           <div class="section-head">
-            <h2>工序报工</h2>
+            <h2 id="report-title">工序报工</h2>
             <span id="selected-order-label">未选择</span>
+          </div>
+          <div class="scan-card" id="workorder-scan-section">
+            <label>
+              工单码 / 工单二维码内容
+              <input id="workorder-scan-input" type="text" placeholder="示例：WO|WO-240629-01|成型 / 压制 或完整扫码链接" />
+            </label>
+            <button class="secondary-submit" id="workorder-apply-btn" type="button">带入工单</button>
+            <div class="scan-status" id="workorder-scan-status">工人端建议直接扫工单二维码跳转进本页；Alpha 也支持把工单码粘贴进来模拟。</div>
+            <div class="scan-preview" id="workorder-scan-preview">未识别工单</div>
           </div>
           <form id="mobile-report-form" class="mobile-form">
             <label>
@@ -78,23 +89,48 @@
               异常备注
               <textarea id="report-note" rows="3" placeholder="例如：缺料、设备调整、尺寸偏差"></textarea>
             </label>
-            <button class="submit-button" type="submit">提交报工</button>
+            <button class="submit-button" id="report-submit-btn" type="submit">提交报工</button>
           </form>
         </section>
 
-        <section class="report-card">
+        <section class="report-card" id="stock-section">
           <div class="section-head">
-            <h2>扫码入库</h2>
-            <span>物料批次</span>
+            <h2 id="stock-title">扫码出入库</h2>
+            <span id="stock-meta">物料批次</span>
           </div>
+
+          <div class="scan-card" id="scan-section">
+            <div class="scan-actions">
+              <button class="ghost-inline" id="scan-camera-btn" type="button">启动摄像头</button>
+              <button class="ghost-inline" id="scan-stop-btn" type="button">停止扫码</button>
+            </div>
+            <label>
+              批次码 / 二维码内容
+              <input id="scan-input" type="text" placeholder="示例：MAT|RM-001|EVA-240615-A|A-01" />
+            </label>
+            <button class="secondary-submit" id="scan-apply-btn" type="button">应用批次码</button>
+            <div class="scan-status" id="scan-status">Alpha 版先支持摄像头扫码和粘贴批次码双入口。</div>
+            <div class="scan-preview" id="scan-preview">未识别批次</div>
+            <div class="camera-wrap hidden" id="scan-camera-wrap">
+              <video id="scan-video" playsinline muted></video>
+            </div>
+          </div>
+
           <form id="stock-form" class="mobile-form">
+            <label>
+              出入库类型
+              <select id="stock-type">
+                <option value="in">入库</option>
+                <option value="out">出库</option>
+              </select>
+            </label>
             <label>
               物料批次
               <select id="stock-batch"></select>
             </label>
             <div class="number-grid">
               <label>
-                入库数量
+                <span id="stock-qty-label">入库数量</span>
                 <input id="stock-qty" type="number" min="0" inputmode="numeric" value="0" />
               </label>
               <label>
@@ -102,15 +138,19 @@
                 <input id="stock-location" type="text" value="A-01" />
               </label>
             </div>
-            <button class="secondary-submit" type="submit">提交入库</button>
+            <label>
+              备注
+              <textarea id="stock-note" rows="2" placeholder="例如：采购到货、领料、退料、盘点调整"></textarea>
+            </label>
+            <button class="secondary-submit" id="stock-submit-btn" type="submit">提交入库</button>
           </form>
         </section>
       </main>
 
       <nav class="bottom-nav">
-        <button class="bottom-item active" data-scroll="task-list">工单</button>
-        <button class="bottom-item" data-scroll="report-card">报工</button>
-        <button class="bottom-item" data-scroll="stock-form">入库</button>
+        <button class="bottom-item active" id="nav-one" data-scroll="summary-strip">概览</button>
+        <button class="bottom-item" id="nav-two" data-scroll="tasks-section">工单</button>
+        <button class="bottom-item" id="nav-three" data-scroll="report-section">报工</button>
       </nav>
 
       <div class="toast" id="toast">已提交</div>

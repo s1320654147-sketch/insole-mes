@@ -95,13 +95,25 @@
         </section>
 
         <section class="view" id="samples-view">
-          <section class="panel">
-            <div class="panel-head">
-              <h2>样品单列表</h2>
-              <span class="badge">按项目追踪</span>
-            </div>
-            <div id="sample-table"></div>
-          </section>
+          <div class="panel-grid two-up">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>样品单列表</h2>
+                <div class="panel-actions">
+                  <span class="badge">按项目追踪</span>
+                  <button class="ghost-btn slim-btn" id="new-sample-btn" type="button">新建样品单</button>
+                </div>
+              </div>
+              <div id="sample-table"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head">
+                <h2 id="sample-editor-title">样品单编辑</h2>
+                <span class="badge">表单保存</span>
+              </div>
+              <div id="sample-editor"></div>
+            </section>
+          </div>
         </section>
 
         <section class="view" id="orders-view">
@@ -115,8 +127,11 @@
             </section>
             <section class="panel">
               <div class="panel-head">
-                <h2>工单详情</h2>
-                <span class="badge">当前选中</span>
+                <h2 id="order-editor-title">工单详情</h2>
+                <div class="panel-actions">
+                  <span class="badge">当前选中</span>
+                  <button class="ghost-btn slim-btn" id="new-order-inline-btn" type="button">新建生产单</button>
+                </div>
               </div>
               <div id="order-detail"></div>
             </section>
@@ -165,6 +180,6 @@
     </div>
 
     <div class="toast" id="toast">已处理</div>
-    <script src="./admin.js"></script>
+    <script src="./admin-app.js"></script>
   </body>
 </html>

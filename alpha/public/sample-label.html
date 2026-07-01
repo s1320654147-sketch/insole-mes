@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>样品标签</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #eef2f6;
+        --surface: #ffffff;
+        --border: #d6dee8;
+        --text: #111827;
+        --muted: #64748b;
+        --primary: #2563eb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      .page { width: min(100%, 920px); margin: 0 auto; display: grid; gap: 18px; }
+      .topbar, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+      .topbar { padding: 18px 20px; }
+      .eyebrow { color: var(--primary); font-size: 12px; font-weight: 700; }
+      h1 { margin: 8px 0 6px; font-size: 28px; }
+      p { margin: 0; color: var(--muted); line-height: 1.6; }
+      .grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 18px; }
+      .card { padding: 18px; display: grid; gap: 14px; }
+      .meta-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      .meta-item { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: #f8fafc; }
+      .meta-label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+      .meta-value { font-size: 16px; font-weight: 700; word-break: break-word; }
+      .code-block { padding: 14px; border: 1px dashed var(--border); border-radius: 8px; background: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-all; }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+      .button { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 0 14px; border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--text); text-decoration: none; cursor: pointer; font: inherit; }
+      .button.primary { border-color: var(--primary); background: var(--primary); color: #fff; }
+      .qr-wrap { display: grid; place-items: center; min-height: 300px; padding: 16px; border: 1px dashed var(--border); border-radius: 8px; background: #fff; }
+      .qr-wrap img { width: min(100%, 260px); height: auto; }
+      .tips { display: grid; gap: 8px; padding-left: 18px; margin: 0; }
+      .warn { color: #92400e; background: #fff7ed; border: 1px solid #fdba74; padding: 12px 14px; border-radius: 8px; }
+      @media print {
+        body { background: #fff; padding: 0; }
+        .topbar, .warn, .actions, .tips-card { display: none !important; }
+        .page { width: 100%; }
+        .grid { grid-template-columns: 1fr 1fr; }
+        .card { border: 1px solid #bbb; }
+      }
+      @media (max-width: 760px) {
+        body { padding: 14px; }
+        .grid, .meta-grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <section class="topbar">
+        <div class="eyebrow">Insole MES Alpha</div>
+        <h1>样品单标签 / 打样流转</h1>
+        <p>这张标签给打样袋、样品盒或版本留样卡使用。它更偏向打样追溯、版本确认和样品流转。</p>
+      </section>
+
+      <div class="warn" id="local-note">如果当前链接是 localhost，这个二维码更适合本机演示。真机扫码要换成局域网地址或正式线上域名。</div>
+
+      <section class="grid">
+        <article class="card">
+          <div class="meta-grid" id="meta-grid"></div>
+          <div>
+            <div class="meta-label">样品码</div>
+            <div class="code-block" id="sample-code"></div>
+          </div>
+          <div>
+            <div class="meta-label">管理端定位链接</div>
+            <div class="code-block" id="sample-link"></div>
+          </div>
+          <div class="actions">
+            <button class="button" id="copy-code-btn" type="button">复制样品码</button>
+            <button class="button" id="copy-link-btn" type="button">复制定位链接</button>
+            <a class="button primary" id="open-admin-link" href="#">打开管理端页</a>
+            <button class="button" id="print-btn" type="button">打印标签</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="meta-label">二维码预览</div>
+          <div class="qr-wrap" id="qr-wrap">
+            <img id="qr-image" alt="样品二维码" />
+            <div id="qr-fallback" class="code-block" style="display:none;">当前无法加载二维码图片，请先复制定位链接或样品码使用。</div>
+          </div>
+          <p>Alpha 版先让二维码定位到管理端对应的样品详情。后面你要把寄样、确认、返修意见接进去，这条链路还能继续复用。</p>
+        </article>
+      </section>
+
+      <article class="card tips-card">
+        <div class="meta-label">建议的实际业务逻辑</div>
+        <ol class="tips">
+          <li>每个打样版本生成唯一样品码和样品标签。</li>
+          <li>标签贴在样品袋、样品盒或留样卡上，避免样品和版本混淆。</li>
+          <li>扫码后优先定位到样品详情，查看版本、负责人、客户项目和截止时间。</li>
+          <li>后续可继续接寄样记录、客户确认结果和返修意见。</li>
+        </ol>
+      </article>
+    </div>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const sampleId = String(params.get("sample") || "").trim();
+      const name = String(params.get("name") || "").trim();
+      const customer = String(params.get("customer") || "").trim();
+      const version = String(params.get("version") || "").trim();
+      const owner = String(params.get("owner") || "").trim();
+      const dueDate = String(params.get("dueDate") || "").trim();
+      const status = String(params.get("status") || "").trim();
+      const sampleCode = String(params.get("code") || `SP|${sampleId}|${version}`).trim();
+      const adminLink = `${window.location.origin}/admin.html?sample=${encodeURIComponent(sampleId)}`;
+      const qrService = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(adminLink)}`;
+
+      const metaItems = [
+        ["样品单号", sampleId || "-"],
+        ["样品名称", name || "-"],
+        ["客户 / 项目", customer || "-"],
+        ["版本", version || "-"],
+        ["负责人", owner || "-"],
+        ["状态 / 截止", `${status || "-"} / ${dueDate || "-"}`],
+      ];
+
+      document.getElementById("meta-grid").innerHTML = metaItems.map(([label, value]) => `
+        <div class="meta-item">
+          <span class="meta-label">${label}</span>
+          <div class="meta-value">${value || "-"}</div>
+        </div>
+      `).join("");
+
+      document.getElementById("sample-code").textContent = sampleCode || "未传入样品码";
+      document.getElementById("sample-link").textContent = sampleId ? adminLink : "未生成";
+      document.getElementById("open-admin-link").href = sampleId ? adminLink : "#";
+      document.getElementById("open-admin-link").target = "_blank";
+      document.getElementById("open-admin-link").rel = "noreferrer";
+
+      if (/^https?:\/\/(localhost|127\.0\.0\.1)/i.test(window.location.origin)) {
+        document.getElementById("local-note").style.display = "block";
+      } else {
+        document.getElementById("local-note").style.display = "none";
+      }
+
+      const qrImage = document.getElementById("qr-image");
+      const qrFallback = document.getElementById("qr-fallback");
+      if (sampleId) {
+        qrImage.src = qrService;
+        qrImage.onerror = () => {
+          qrImage.style.display = "none";
+          qrFallback.style.display = "block";
+        };
+      } else {
+        qrImage.style.display = "none";
+        qrFallback.style.display = "block";
+      }
+
+      document.getElementById("copy-code-btn").addEventListener("click", async () => {
+        if (!sampleCode) return;
+        await navigator.clipboard.writeText(sampleCode);
+      });
+
+      document.getElementById("copy-link-btn").addEventListener("click", async () => {
+        if (!sampleId) return;
+        await navigator.clipboard.writeText(adminLink);
+      });
+
+      document.getElementById("print-btn").addEventListener("click", () => {
+        window.print();
+      });
+    </script>
+  </body>
+</html>

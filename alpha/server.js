@@ -47,6 +47,19 @@ function requireUser(request, response) {
   return user;
 }
 
+function requireRole(user, response, roles) {
+  if (roles.includes(user.role)) return true;
+  sendJson(response, 403, { error: "FORBIDDEN", message: "当前账号没有这个操作权限" });
+  return false;
+}
+
+async function withScopedState(result, role) {
+  return {
+    ...result,
+    state: await store.getState(role),
+  };
+}
+
 async function handleApi(request, response, url) {
   if (url.pathname === "/health") {
     sendJson(response, 200, { ok: true, store: store.kind });
@@ -77,25 +90,69 @@ async function handleApi(request, response, url) {
   if (url.pathname === "/api/state" && request.method === "GET") {
     const user = requireUser(request, response);
     if (!user) return true;
-    sendJson(response, 200, await store.getState());
+    sendJson(response, 200, await store.getState(user.role));
+    return true;
+  }
+
+  if (url.pathname === "/api/samples" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const body = await readJson(request);
+    const result = await store.createSample({ ...body, operator: user.name });
+    sendJson(response, 201, await withScopedState(result, user.role));
+    return true;
+  }
+
+  if (url.pathname.startsWith("/api/samples/") && request.method === "PUT") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const body = await readJson(request);
+    const sampleId = decodeURIComponent(url.pathname.slice("/api/samples/".length));
+    const result = await store.updateSample(sampleId, { ...body, operator: user.name });
+    sendJson(response, 200, await withScopedState(result, user.role));
+    return true;
+  }
+
+  if (url.pathname === "/api/work-orders" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const body = await readJson(request);
+    const result = await store.createWorkOrder({ ...body, operator: user.name });
+    sendJson(response, 201, await withScopedState(result, user.role));
+    return true;
+  }
+
+  if (url.pathname.startsWith("/api/work-orders/") && request.method === "PUT") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const body = await readJson(request);
+    const workOrderId = decodeURIComponent(url.pathname.slice("/api/work-orders/".length));
+    const result = await store.updateWorkOrder(workOrderId, { ...body, operator: user.name });
+    sendJson(response, 200, await withScopedState(result, user.role));
     return true;
   }
 
   if (url.pathname === "/api/reports" && request.method === "POST") {
     const user = requireUser(request, response);
     if (!user) return true;
+    if (!requireRole(user, response, ["manager", "worker"])) return true;
     const body = await readJson(request);
     const result = await store.createReport({ ...body, operator: user.name });
-    sendJson(response, 201, result);
+    sendJson(response, 201, await withScopedState(result, user.role));
     return true;
   }
 
   if (url.pathname === "/api/stock-movements" && request.method === "POST") {
     const user = requireUser(request, response);
     if (!user) return true;
+    if (!requireRole(user, response, ["manager", "warehouse"])) return true;
     const body = await readJson(request);
     const result = await store.createStockMovement({ ...body, operator: user.name });
-    sendJson(response, 201, result);
+    sendJson(response, 201, await withScopedState(result, user.role));
     return true;
   }
 
