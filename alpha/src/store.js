@@ -143,42 +143,24 @@ function serializeStateForRole(data, role) {
     return serializePublicState(state);
   }
 
-  if (role === "worker") {
+  if (role === "worker" || role === "warehouse") {
     const workOrders = state.workOrders.filter((item) => item.status !== "已完成");
-    const alerts = state.alerts.filter((item) => item.status === "open");
-    const reports = state.reports.slice(0, 20);
-    return {
-      samples: [],
-      workOrders,
-      materials: [],
-      reports,
-      stockMovements: [],
-      activities: state.activities.slice(0, 12),
-      alerts,
-      stats: [
-        { label: "待办工单", value: workOrders.length },
-        { label: "异常预警", value: alerts.length },
-        { label: "报工记录", value: reports.length },
-      ],
-    };
-  }
-
-  if (role === "warehouse") {
     const materials = state.materials;
     const alerts = state.alerts.filter((item) => item.status === "open");
+    const reports = state.reports.slice(0, 30);
     const stockMovements = state.stockMovements.slice(0, 30);
     return {
       samples: [],
-      workOrders: [],
+      workOrders,
       materials,
-      reports: [],
+      reports,
       stockMovements,
-      activities: state.activities.slice(0, 12),
+      activities: state.activities.slice(0, 16),
       alerts,
       stats: [
+        { label: "待办工单", value: workOrders.length },
         { label: "批次物料", value: materials.length },
-        { label: "库存预警", value: alerts.length },
-        { label: "出入库记录", value: stockMovements.length },
+        { label: "待处理预警", value: alerts.length },
       ],
     };
   }

@@ -139,7 +139,7 @@ async function handleApi(request, response, url) {
   if (url.pathname === "/api/reports" && request.method === "POST") {
     const user = requireUser(request, response);
     if (!user) return true;
-    if (!requireRole(user, response, ["manager", "worker"])) return true;
+    if (!requireRole(user, response, ["manager", "worker", "warehouse"])) return true;
     const body = await readJson(request);
     const result = await store.createReport({ ...body, operator: user.name });
     sendJson(response, 201, await withScopedState(result, user.role));
@@ -149,7 +149,7 @@ async function handleApi(request, response, url) {
   if (url.pathname === "/api/stock-movements" && request.method === "POST") {
     const user = requireUser(request, response);
     if (!user) return true;
-    if (!requireRole(user, response, ["manager", "warehouse"])) return true;
+    if (!requireRole(user, response, ["manager", "worker", "warehouse"])) return true;
     const body = await readJson(request);
     const result = await store.createStockMovement({ ...body, operator: user.name });
     sendJson(response, 201, await withScopedState(result, user.role));

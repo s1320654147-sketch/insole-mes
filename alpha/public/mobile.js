@@ -14,12 +14,13 @@ const scanState = {
   timer: null,
   detector: null,
   active: false,
+  target: "",
 };
 
 const roleLabels = {
   manager: "管理端",
-  worker: "工人",
-  warehouse: "仓库",
+  worker: "现场端",
+  warehouse: "现场端",
 };
 
 function token() {
@@ -158,47 +159,24 @@ function selectValueForMaterial(material) {
 }
 
 function getRoleConfig(role) {
-  if (role === "warehouse") {
-    return {
-      eyebrow: "仓库端",
-      title: "批次出入库",
-      loginTitle: "仓库端登录",
-      banner: "仓库账号默认只看批次物料、库存预警和扫码出入库。当前这版先走 H5 浏览器扫码，后面可以再接钉钉或微信入口。",
-      tasksTitle: "库存概览",
-      tasksMeta: "按风险优先",
-      reportTitle: "仓库说明",
-      primaryAction: { text: "扫码入库", action: "stock-in" },
-      secondaryAction: { text: "扫码出库", action: "stock-out" },
-      tertiaryAction: { text: "批次查询", action: "batch-check" },
-      showTasks: false,
-      showReport: false,
-      showStock: true,
-      nav: [
-        { id: "nav-one", label: "概览", target: "summary-strip", hidden: false },
-        { id: "nav-two", label: "扫码", target: "scan-section", hidden: false },
-        { id: "nav-three", label: "出入库", target: "stock-section", hidden: false },
-      ],
-    };
-  }
-
   return {
-    eyebrow: "工人端",
-    title: "今日待办",
-    loginTitle: "工人端登录",
-    banner: "工人账号默认只看待办工单和报工入口，不显示样品配置、库存主数据和管理总览。",
+    eyebrow: "现场端",
+    title: "现场作业",
+    loginTitle: role === "warehouse" ? "现场端登录" : "现场端登录",
+    banner: "现场端适合小工厂同一个人兼做接单、报工、原材料入库、成品暂存和出库；所有提交都会回流到管理端。",
     tasksTitle: "当前工单",
     tasksMeta: "按交期排序",
     reportTitle: "工序报工",
-    primaryAction: { text: "扫码接单", action: "scan-work" },
-    secondaryAction: { text: "异常上报", action: "exception" },
-    tertiaryAction: { text: "刷新任务", action: "refresh-tasks" },
+    primaryAction: { text: "扫工单码", action: "scan-work" },
+    secondaryAction: { text: "扫码入库", action: "stock-in" },
+    tertiaryAction: { text: "扫码出库", action: "stock-out" },
     showTasks: true,
     showReport: true,
-    showStock: false,
+    showStock: true,
     nav: [
       { id: "nav-one", label: "概览", target: "summary-strip", hidden: false },
-      { id: "nav-two", label: "工单", target: "tasks-section", hidden: false },
-      { id: "nav-three", label: "报工", target: "report-section", hidden: false },
+      { id: "nav-two", label: "报工", target: "report-section", hidden: false },
+      { id: "nav-three", label: "出入库", target: "stock-section", hidden: false },
     ],
   };
 }
@@ -219,7 +197,7 @@ function applyRoleMode() {
   document.getElementById("tasks-title").textContent = config.tasksTitle;
   document.getElementById("tasks-meta").textContent = config.tasksMeta;
   document.getElementById("report-title").textContent = config.reportTitle;
-  document.getElementById("admin-link").classList.toggle("hidden", user.role !== "worker");
+  document.getElementById("admin-link").classList.toggle("hidden", user.role === "manager");
 
   document.getElementById("action-primary").textContent = config.primaryAction.text;
   document.getElementById("action-primary").setAttribute("data-action", config.primaryAction.action);
@@ -248,27 +226,15 @@ function renderSummary() {
     return;
   }
 
-  if (user.role === "warehouse") {
-    const materials = mobileState.data.materials || [];
-    const lowStock = materials.filter((item) => Number(item.stockQty) < Number(item.safetyQty)).length;
-    const expiringSoon = materials.filter((item) => daysUntil(item.expiryDate) <= 10).length;
-    const todayMovements = (mobileState.data.stockMovements || []).filter((item) => todayKey(item.createdAt) === todayKey(new Date())).length;
-    root.innerHTML = `
-      <div><span class="summary-value">${lowStock}</span><span class="summary-label">低库存批次</span></div>
-      <div><span class="summary-value">${expiringSoon}</span><span class="summary-label">近效期批次</span></div>
-      <div><span class="summary-value">${todayMovements}</span><span class="summary-label">今日出入库</span></div>
-    `;
-    return;
-  }
-
   const workOrders = mobileState.data.workOrders || [];
   const pending = workOrders.filter((order) => order.status !== "已完成").length;
-  const done = workOrders.reduce((sum, order) => sum + Number(order.doneQty || 0), 0);
-  const alerts = (mobileState.data.alerts || []).filter((item) => item.status === "open").length;
+  const materials = mobileState.data.materials || [];
+  const lowStock = materials.filter((item) => Number(item.stockQty) < Number(item.safetyQty)).length;
+  const todayMovements = (mobileState.data.stockMovements || []).filter((item) => todayKey(item.createdAt) === todayKey(new Date())).length;
   root.innerHTML = `
     <div><span class="summary-value">${pending}</span><span class="summary-label">待办工单</span></div>
-    <div><span class="summary-value">${done}</span><span class="summary-label">累计完成</span></div>
-    <div><span class="summary-value">${alerts}</span><span class="summary-label">异常预警</span></div>
+    <div><span class="summary-value">${lowStock}</span><span class="summary-label">低库存批次</span></div>
+    <div><span class="summary-value">${todayMovements}</span><span class="summary-label">今日出入库</span></div>
   `;
 }
 
@@ -465,7 +431,6 @@ function applyWorkOrderCode(rawValue, announce = true) {
 }
 
 function applyWorkOrderFromUrlQuery() {
-  if (mobileState.currentUser?.role !== "worker") return;
   const url = new URL(window.location.href);
   const workOrderValue = url.searchParams.get("workOrder") || url.searchParams.get("order") || url.searchParams.get("workCode");
   if (!workOrderValue) return;
@@ -476,7 +441,6 @@ function applyWorkOrderFromUrlQuery() {
 }
 
 function applyBatchFromUrlQuery() {
-  if (mobileState.currentUser?.role !== "warehouse") return;
   const url = new URL(window.location.href);
   const batchValue = url.searchParams.get("batch");
   if (!batchValue) return;
@@ -489,7 +453,7 @@ function applyBatchFromUrlQuery() {
   showToast("批次已自动带入");
 }
 
-function stopCameraScan() {
+function stopCameraScan(options = {}) {
   if (scanState.timer) {
     window.clearTimeout(scanState.timer);
     scanState.timer = null;
@@ -500,8 +464,13 @@ function stopCameraScan() {
   }
   scanState.detector = null;
   scanState.active = false;
+  scanState.target = "";
+  document.getElementById("workorder-camera-wrap").classList.add("hidden");
   document.getElementById("scan-camera-wrap").classList.add("hidden");
-  setScanStatus("摄像头已停止。也可以直接粘贴批次码。");
+  if (!options.keepStatus) {
+    setWorkOrderScanStatus("摄像头已停止。也可以直接粘贴工单码。");
+    setScanStatus("摄像头已停止。也可以直接粘贴批次码。");
+  }
 }
 
 async function scanLoop(video) {
@@ -510,10 +479,14 @@ async function scanLoop(video) {
     const barcodes = await scanState.detector.detect(video);
     const result = barcodes.find((item) => item.rawValue);
     if (result?.rawValue) {
-      const ok = applyBatchCode(result.rawValue);
+      const ok = scanState.target === "workOrder" ? applyWorkOrderCode(result.rawValue) : applyBatchCode(result.rawValue);
       if (ok) {
-        setScanStatus("已识别二维码，批次已带入。");
-        stopCameraScan();
+        if (scanState.target === "workOrder") {
+          setWorkOrderScanStatus("已识别二维码，工单已带入。");
+        } else {
+          setScanStatus("已识别二维码，批次已带入。");
+        }
+        stopCameraScan({ keepStatus: true });
         return;
       }
     }
@@ -523,20 +496,26 @@ async function scanLoop(video) {
   scanState.timer = window.setTimeout(() => scanLoop(video), 350);
 }
 
-async function startCameraScan() {
+async function startCameraScan(target = "batch") {
   if (!navigator.mediaDevices?.getUserMedia) {
     showToast("当前浏览器不支持摄像头");
     return;
   }
   if (!("BarcodeDetector" in window)) {
     showToast("当前浏览器原生扫码支持有限，请先粘贴批次码");
-    setScanStatus("当前浏览器不支持原生扫码，建议先用批次码粘贴模拟。");
+    if (target === "workOrder") {
+      setWorkOrderScanStatus("当前浏览器不支持原生扫码，建议先用工单码粘贴模拟，或用微信扫码打开工单链接。");
+    } else {
+      setScanStatus("当前浏览器不支持原生扫码，建议先用批次码粘贴模拟。");
+    }
     return;
   }
 
   try {
     stopCameraScan();
-    const video = document.getElementById("scan-video");
+    scanState.target = target;
+    const isWorkOrderScan = target === "workOrder";
+    const video = document.getElementById(isWorkOrderScan ? "workorder-scan-video" : "scan-video");
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: "environment" } },
       audio: false,
@@ -548,13 +527,21 @@ async function startCameraScan() {
     scanState.detector = detectorFormats ? new BarcodeDetector({ formats: detectorFormats }) : new BarcodeDetector();
     scanState.active = true;
     video.srcObject = stream;
-    document.getElementById("scan-camera-wrap").classList.remove("hidden");
+    document.getElementById(isWorkOrderScan ? "workorder-camera-wrap" : "scan-camera-wrap").classList.remove("hidden");
     await video.play();
-    setScanStatus("摄像头已开启，请对准物料批次二维码。");
+    if (isWorkOrderScan) {
+      setWorkOrderScanStatus("摄像头已开启，请对准工单二维码。");
+    } else {
+      setScanStatus("摄像头已开启，请对准物料批次二维码。");
+    }
     await scanLoop(video);
   } catch (error) {
     stopCameraScan();
-    setScanStatus("摄像头开启失败，请检查权限或直接粘贴批次码。");
+    if (target === "workOrder") {
+      setWorkOrderScanStatus("摄像头开启失败，请检查权限或直接粘贴工单码。");
+    } else {
+      setScanStatus("摄像头开启失败，请检查权限或直接粘贴批次码。");
+    }
     showToast(error.message || "摄像头开启失败");
   }
 }
@@ -642,9 +629,8 @@ function bindEvents() {
       return;
     }
     if (action === "scan-work") {
-      setWorkOrderScanStatus("工单二维码建议直接跳转进本页；Alpha 也支持粘贴工单码模拟。");
       scrollToTarget("workorder-scan-section");
-      showToast("请扫工单二维码，或粘贴工单码");
+      await startCameraScan("workOrder");
       return;
     }
     showToast("已定位到当前工单，可直接报工");
@@ -656,6 +642,14 @@ function bindEvents() {
       document.getElementById("stock-type").value = "out";
       updateStockMode();
       scrollToTarget("scan-section");
+      await startCameraScan("batch");
+      return;
+    }
+    if (action === "stock-in") {
+      document.getElementById("stock-type").value = "in";
+      updateStockMode();
+      scrollToTarget("scan-section");
+      await startCameraScan("batch");
       return;
     }
     showToast("请在异常备注里写清楚原因");
@@ -671,6 +665,13 @@ function bindEvents() {
     if (action === "batch-check") {
       scrollToTarget("stock-form");
       showToast("已定位到批次表单");
+      return;
+    }
+    if (action === "stock-out") {
+      document.getElementById("stock-type").value = "out";
+      updateStockMode();
+      scrollToTarget("scan-section");
+      await startCameraScan("batch");
       return;
     }
     showToast("已处理");
@@ -725,8 +726,16 @@ function bindEvents() {
     applyWorkOrderCode(document.getElementById("workorder-scan-input").value);
   });
 
+  document.getElementById("workorder-camera-btn").addEventListener("click", () => {
+    startCameraScan("workOrder");
+  });
+
+  document.getElementById("workorder-stop-btn").addEventListener("click", () => {
+    stopCameraScan();
+  });
+
   document.getElementById("scan-camera-btn").addEventListener("click", () => {
-    startCameraScan();
+    startCameraScan("batch");
   });
 
   document.getElementById("scan-stop-btn").addEventListener("click", () => {

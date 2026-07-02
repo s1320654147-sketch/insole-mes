@@ -62,13 +62,20 @@
             <span id="selected-order-label">未选择</span>
           </div>
           <div class="scan-card" id="workorder-scan-section">
+            <div class="scan-actions">
+              <button class="ghost-inline" id="workorder-camera-btn" type="button">启动摄像头</button>
+              <button class="ghost-inline" id="workorder-stop-btn" type="button">停止扫码</button>
+            </div>
             <label>
               工单码 / 工单二维码内容
               <input id="workorder-scan-input" type="text" placeholder="示例：WO|WO-240629-01|成型 / 压制 或完整扫码链接" />
             </label>
             <button class="secondary-submit" id="workorder-apply-btn" type="button">带入工单</button>
-            <div class="scan-status" id="workorder-scan-status">工人端建议直接扫工单二维码跳转进本页；Alpha 也支持把工单码粘贴进来模拟。</div>
+            <div class="scan-status" id="workorder-scan-status">现场端支持直接调摄像头扫工单码，也支持从微信 / 浏览器扫二维码跳转进本页。</div>
             <div class="scan-preview" id="workorder-scan-preview">未识别工单</div>
+            <div class="camera-wrap hidden" id="workorder-camera-wrap">
+              <video id="workorder-scan-video" playsinline muted></video>
+            </div>
           </div>
           <form id="mobile-report-form" class="mobile-form">
             <label>
