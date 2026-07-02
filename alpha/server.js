@@ -7,6 +7,7 @@ import { createToken, verifyToken } from "./src/auth.js";
 
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(rootDir, "public");
+const qrScannerDir = join(rootDir, "node_modules", "qr-scanner");
 const port = Number(process.env.PORT || 3000);
 const store = await createStore(rootDir);
 
@@ -180,10 +181,33 @@ async function serveStatic(request, response, url) {
   }
 }
 
+async function serveQrScannerAsset(response, url) {
+  const assetNames = {
+    "/vendor/qr-scanner/qr-scanner.min.js": "qr-scanner.min.js",
+    "/vendor/qr-scanner/qr-scanner-worker.min.js": "qr-scanner-worker.min.js",
+  };
+  const assetName = assetNames[url.pathname];
+  if (!assetName) return false;
+
+  try {
+    const content = await readFile(join(qrScannerDir, assetName));
+    response.writeHead(200, {
+      "content-type": "application/javascript; charset=utf-8",
+      "cache-control": "public, max-age=3600",
+    });
+    response.end(content);
+  } catch {
+    response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    response.end("QR scanner asset not found");
+  }
+  return true;
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host}`);
     if (await handleApi(request, response, url)) return;
+    if (await serveQrScannerAsset(response, url)) return;
     await serveStatic(request, response, url);
   } catch (error) {
     console.error(error);

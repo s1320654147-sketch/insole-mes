@@ -1,6 +1,8 @@
 ﻿const tokenKey = "insole_mes_alpha_token_mobile";
 const adminTokenKey = "insole_mes_alpha_token_admin";
 
+import QrScanner from "/vendor/qr-scanner/qr-scanner.min.js";
+
 const mobileState = {
   selectedOrderId: "",
   currentUser: null,
@@ -10,10 +12,9 @@ const mobileState = {
 };
 
 const scanState = {
-  stream: null,
-  timer: null,
-  detector: null,
+  scanner: null,
   active: false,
+  starting: false,
   target: "",
 };
 
@@ -454,16 +455,13 @@ function applyBatchFromUrlQuery() {
 }
 
 function stopCameraScan(options = {}) {
-  if (scanState.timer) {
-    window.clearTimeout(scanState.timer);
-    scanState.timer = null;
+  if (scanState.scanner) {
+    scanState.scanner.stop();
+    scanState.scanner.destroy();
+    scanState.scanner = null;
   }
-  if (scanState.stream) {
-    scanState.stream.getTracks().forEach((track) => track.stop());
-    scanState.stream = null;
-  }
-  scanState.detector = null;
   scanState.active = false;
+  scanState.starting = false;
   scanState.target = "";
   document.getElementById("workorder-camera-wrap").classList.add("hidden");
   document.getElementById("scan-camera-wrap").classList.add("hidden");
@@ -473,76 +471,83 @@ function stopCameraScan(options = {}) {
   }
 }
 
-async function scanLoop(video) {
-  if (!scanState.active || !scanState.detector) return;
-  try {
-    const barcodes = await scanState.detector.detect(video);
-    const result = barcodes.find((item) => item.rawValue);
-    if (result?.rawValue) {
-      const ok = scanState.target === "workOrder" ? applyWorkOrderCode(result.rawValue) : applyBatchCode(result.rawValue);
-      if (ok) {
-        if (scanState.target === "workOrder") {
-          setWorkOrderScanStatus("已识别二维码，工单已带入。");
-        } else {
-          setScanStatus("已识别二维码，批次已带入。");
-        }
-        stopCameraScan({ keepStatus: true });
-        return;
-      }
+function handleScannedCode(result) {
+  if (!scanState.active) return;
+  const value = typeof result === "string" ? result : result?.data;
+  if (!value) return;
+
+  const target = scanState.target;
+  const ok = target === "workOrder" ? applyWorkOrderCode(value) : applyBatchCode(value);
+  if (!ok) {
+    if (target === "workOrder") {
+      setWorkOrderScanStatus("二维码已识别，但不是本系统的工单码，请更换二维码。");
+    } else {
+      setScanStatus("二维码已识别，但不是本系统的物料批次码，请更换二维码。");
     }
-  } catch {
-    // ignore per-frame errors
+    return;
   }
-  scanState.timer = window.setTimeout(() => scanLoop(video), 350);
+
+  stopCameraScan({ keepStatus: true });
+  if (target === "workOrder") {
+    setWorkOrderScanStatus("已识别二维码，工单已带入，可直接报工。");
+  } else {
+    setScanStatus("已识别二维码，批次已带入，可直接提交出入库。");
+  }
+  showToast("二维码识别成功");
+}
+
+function cameraErrorMessage(error) {
+  if (!window.isSecureContext) return "摄像头只能在 HTTPS 页面中使用，请打开 Render 的 https:// 地址。";
+  if (error?.name === "NotAllowedError") return "摄像头权限被拒绝，请在浏览器设置中允许此网站使用摄像头。";
+  if (error?.name === "NotFoundError") return "没有找到可用摄像头，请检查设备摄像头。";
+  if (error?.name === "NotReadableError") return "摄像头正被其他应用占用，请关闭其他扫码或拍照应用后重试。";
+  return error?.message || "摄像头开启失败，请检查浏览器权限。";
 }
 
 async function startCameraScan(target = "batch") {
+  if (scanState.starting) return;
   if (!navigator.mediaDevices?.getUserMedia) {
-    showToast("当前浏览器不支持摄像头");
-    return;
-  }
-  if (!("BarcodeDetector" in window)) {
-    showToast("当前浏览器原生扫码支持有限，请先粘贴批次码");
-    if (target === "workOrder") {
-      setWorkOrderScanStatus("当前浏览器不支持原生扫码，建议先用工单码粘贴模拟，或用微信扫码打开工单链接。");
-    } else {
-      setScanStatus("当前浏览器不支持原生扫码，建议先用批次码粘贴模拟。");
-    }
+    const message = window.isSecureContext
+      ? "当前浏览器无法调用摄像头，请改用系统浏览器打开。"
+      : "摄像头只能在 HTTPS 页面中使用。";
+    showToast(message);
+    target === "workOrder" ? setWorkOrderScanStatus(message) : setScanStatus(message);
     return;
   }
 
   try {
     stopCameraScan();
+    scanState.starting = true;
     scanState.target = target;
     const isWorkOrderScan = target === "workOrder";
     const video = document.getElementById(isWorkOrderScan ? "workorder-scan-video" : "scan-video");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" } },
-      audio: false,
-    });
-    const formats = BarcodeDetector.getSupportedFormats ? await BarcodeDetector.getSupportedFormats() : [];
-    const detectorFormats = formats.includes("qr_code") ? ["qr_code"] : undefined;
+    const cameraWrap = document.getElementById(isWorkOrderScan ? "workorder-camera-wrap" : "scan-camera-wrap");
 
-    scanState.stream = stream;
-    scanState.detector = detectorFormats ? new BarcodeDetector({ formats: detectorFormats }) : new BarcodeDetector();
+    scanState.scanner = new QrScanner(video, handleScannedCode, {
+      preferredCamera: "environment",
+      maxScansPerSecond: 8,
+      highlightScanRegion: true,
+      returnDetailedScanResult: true,
+      onDecodeError: () => {},
+    });
+    cameraWrap.classList.remove("hidden");
     scanState.active = true;
-    video.srcObject = stream;
-    document.getElementById(isWorkOrderScan ? "workorder-camera-wrap" : "scan-camera-wrap").classList.remove("hidden");
-    await video.play();
+    await scanState.scanner.start();
+    scanState.starting = false;
     if (isWorkOrderScan) {
-      setWorkOrderScanStatus("摄像头已开启，请对准工单二维码。");
+      setWorkOrderScanStatus("摄像头已开启，请将工单二维码完整放入取景框。");
     } else {
-      setScanStatus("摄像头已开启，请对准物料批次二维码。");
+      setScanStatus("摄像头已开启，请将物料批次二维码完整放入取景框。");
     }
-    await scanLoop(video);
   } catch (error) {
     stopCameraScan();
+    const message = cameraErrorMessage(error);
     if (target === "workOrder") {
-      setWorkOrderScanStatus("摄像头开启失败，请检查权限或直接粘贴工单码。");
+      setWorkOrderScanStatus(message);
     } else {
-      setScanStatus("摄像头开启失败，请检查权限或直接粘贴批次码。");
+      setScanStatus(message);
     }
-    showToast(error.message || "摄像头开启失败");
+    showToast(message);
   }
 }
 
