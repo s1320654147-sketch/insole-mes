@@ -40,13 +40,15 @@
       <main class="mobile-main">
         <section class="role-banner" id="role-banner"></section>
 
-        <section class="quick-actions" id="quick-actions-section">
-          <button class="action-button primary-action" id="action-primary" data-action="scan-work">扫码接单</button>
-          <button class="action-button" id="action-secondary" data-action="exception">异常上报</button>
-          <button class="action-button" id="action-tertiary" data-action="stock-in">扫码入库</button>
-        </section>
+        <div class="sticky-operations" id="sticky-operations">
+          <section class="quick-actions" id="quick-actions-section">
+            <button class="action-button primary-action" id="action-primary" data-action="scan-work">扫码接单</button>
+            <button class="action-button" id="action-secondary" data-action="exception">异常上报</button>
+            <button class="action-button" id="action-tertiary" data-action="stock-in">扫码入库</button>
+          </section>
 
-        <section class="summary-strip" id="summary-strip"></section>
+          <section class="summary-strip" id="summary-strip"></section>
+        </div>
 
         <section id="tasks-section">
           <div class="section-head">
@@ -56,10 +58,13 @@
           <div id="task-list" class="task-list"></div>
         </section>
 
-        <section class="report-card" id="report-section">
-          <div class="section-head">
-            <h2 id="report-title">工序报工</h2>
-            <span id="selected-order-label">未选择</span>
+        <section class="report-card workflow-sheet" id="report-section" aria-hidden="true">
+          <div class="workflow-sheet-head">
+            <div>
+              <h2 id="report-title">工序报工</h2>
+              <span id="selected-order-label">未选择</span>
+            </div>
+            <button class="sheet-close" id="report-sheet-close" type="button" aria-label="关闭工序报工">×</button>
           </div>
           <div class="scan-card" id="workorder-scan-section">
             <div class="scan-actions">
@@ -100,10 +105,13 @@
           </form>
         </section>
 
-        <section class="report-card" id="stock-section">
-          <div class="section-head">
-            <h2 id="stock-title">扫码出入库</h2>
-            <span id="stock-meta">物料批次</span>
+        <section class="report-card workflow-sheet" id="stock-section" aria-hidden="true">
+          <div class="workflow-sheet-head">
+            <div>
+              <h2 id="stock-title">扫码出入库</h2>
+              <span id="stock-meta">物料批次</span>
+            </div>
+            <button class="sheet-close" id="stock-sheet-close" type="button" aria-label="关闭扫码出入库">×</button>
           </div>
 
           <div class="scan-card" id="scan-section">
@@ -153,6 +161,8 @@
           </form>
         </section>
       </main>
+
+      <button class="sheet-backdrop hidden" id="sheet-backdrop" type="button" aria-label="关闭操作面板"></button>
 
       <nav class="bottom-nav">
         <button class="bottom-item active" id="nav-one" data-scroll="summary-strip">概览</button>

@@ -112,8 +112,7 @@ h2 {
 }
 
 .mobile-header {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 5;
   display: flex;
   justify-content: space-between;
@@ -179,11 +178,22 @@ h2 {
   line-height: 1.5;
 }
 
+.sticky-operations {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 -12px 14px;
+  padding: 8px 12px 2px;
+  border-bottom: 1px solid transparent;
+  background: rgba(238, 242, 246, 0.97);
+  backdrop-filter: blur(10px);
+}
+
 .quick-actions {
   display: grid;
   grid-template-columns: 1.2fr 1fr 1fr;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .action-button,
@@ -218,7 +228,7 @@ h2 {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .summary-strip > div,
@@ -340,6 +350,77 @@ h2 {
 .report-card {
   margin-top: 14px;
   padding: 14px;
+}
+
+.workflow-sheet {
+  position: fixed;
+  right: 50%;
+  bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  z-index: 9;
+  width: min(calc(100% - 16px), 520px);
+  max-height: calc(100dvh - 250px);
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform: translate(50%, calc(100% + 90px));
+  box-shadow: 0 -12px 30px rgba(15, 23, 42, 0.18);
+  visibility: hidden;
+  transition: transform 180ms ease, visibility 180ms ease;
+}
+
+.workflow-sheet.open {
+  transform: translate(50%, 0);
+  visibility: visible;
+}
+
+.workflow-sheet-head {
+  position: sticky;
+  top: -14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -14px -14px 12px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.workflow-sheet-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.workflow-sheet-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sheet-close {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0 0 calc(64px + env(safe-area-inset-bottom, 0px));
+  z-index: 7;
+  border: 0;
+  background: rgba(15, 23, 42, 0.3);
+}
+
+body.sheet-open {
+  overflow: hidden;
 }
 
 .scan-card,
@@ -478,9 +559,20 @@ h2 {
 }
 
 @media (max-width: 360px) {
-  .quick-actions,
-  .number-grid,
-  .summary-strip {
+  .number-grid {
     grid-template-columns: 1fr;
+  }
+
+  .action-button {
+    padding: 0 6px;
+    font-size: 12px;
+  }
+
+  .summary-strip > div {
+    padding: 10px 7px;
+  }
+
+  .summary-value {
+    font-size: 20px;
   }
 }

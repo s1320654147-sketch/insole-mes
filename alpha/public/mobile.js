@@ -426,7 +426,7 @@ function applyWorkOrderCode(rawValue, announce = true) {
 
   setWorkOrderScanStatus("已识别工单，可直接填写良品 / 不良并提交报工。");
   document.getElementById("workorder-scan-preview").textContent = `已带入：${order.id} / ${order.product} / 当前工序 ${parsed.processName || order.currentProcess}`;
-  scrollToTarget("report-section");
+  openWorkflowSheet("report");
   if (announce) showToast("工单已带入报工页");
   return true;
 }
@@ -450,7 +450,7 @@ function applyBatchFromUrlQuery() {
   document.getElementById("stock-type").value = "in";
   updateStockMode();
   setScanStatus("已从扫码链接带入批次，可直接提交入库或改成出库。");
-  scrollToTarget("scan-section");
+  openWorkflowSheet("stock", { stockType: "in" });
   showToast("批次已自动带入");
 }
 
@@ -579,7 +579,7 @@ async function loadSession() {
 }
 
 function logout() {
-  stopCameraScan();
+  closeWorkflowSheet();
   clearToken();
   mobileState.currentUser = null;
   mobileState.data = null;
@@ -595,6 +595,59 @@ function scrollToTarget(targetId) {
   const target = document.getElementById(targetId);
   if (!target) return;
   target.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+function setActiveQuickAction(action) {
+  ["action-primary", "action-secondary", "action-tertiary"].forEach((id) => {
+    const button = document.getElementById(id);
+    button.classList.toggle("primary-action", button.getAttribute("data-action") === action);
+  });
+}
+
+function setActiveBottomNav(id) {
+  document.querySelectorAll(".bottom-item").forEach((item) => {
+    item.classList.toggle("active", item.id === id);
+  });
+}
+
+function openWorkflowSheet(kind, options = {}) {
+  stopCameraScan({ keepStatus: true });
+  const reportSheet = document.getElementById("report-section");
+  const stockSheet = document.getElementById("stock-section");
+  const isReport = kind === "report";
+
+  if (!isReport && options.stockType) {
+    document.getElementById("stock-type").value = options.stockType;
+    updateStockMode();
+  }
+
+  reportSheet.classList.toggle("open", isReport);
+  stockSheet.classList.toggle("open", !isReport);
+  reportSheet.setAttribute("aria-hidden", String(!isReport));
+  stockSheet.setAttribute("aria-hidden", String(isReport));
+  document.getElementById("sheet-backdrop").classList.remove("hidden");
+  document.body.classList.add("sheet-open");
+
+  if (isReport) {
+    setActiveQuickAction("scan-work");
+    setActiveBottomNav("nav-two");
+  } else {
+    const action = document.getElementById("stock-type").value === "out" ? "stock-out" : "stock-in";
+    setActiveQuickAction(action);
+    setActiveBottomNav("nav-three");
+  }
+}
+
+function closeWorkflowSheet() {
+  stopCameraScan({ keepStatus: true });
+  ["report-section", "stock-section"].forEach((id) => {
+    const sheet = document.getElementById(id);
+    sheet.classList.remove("open");
+    sheet.setAttribute("aria-hidden", "true");
+  });
+  document.getElementById("sheet-backdrop").classList.add("hidden");
+  document.body.classList.remove("sheet-open");
+  setActiveBottomNav("nav-one");
 }
 
 function bindEvents() {
@@ -628,13 +681,12 @@ function bindEvents() {
   document.getElementById("action-primary").addEventListener("click", async () => {
     const action = document.getElementById("action-primary").getAttribute("data-action");
     if (action === "stock-in") {
-      document.getElementById("stock-type").value = "in";
-      updateStockMode();
-      scrollToTarget("scan-section");
+      openWorkflowSheet("stock", { stockType: "in" });
+      await startCameraScan("batch");
       return;
     }
     if (action === "scan-work") {
-      scrollToTarget("workorder-scan-section");
+      openWorkflowSheet("report");
       await startCameraScan("workOrder");
       return;
     }
@@ -644,16 +696,12 @@ function bindEvents() {
   document.getElementById("action-secondary").addEventListener("click", async () => {
     const action = document.getElementById("action-secondary").getAttribute("data-action");
     if (action === "stock-out") {
-      document.getElementById("stock-type").value = "out";
-      updateStockMode();
-      scrollToTarget("scan-section");
+      openWorkflowSheet("stock", { stockType: "out" });
       await startCameraScan("batch");
       return;
     }
     if (action === "stock-in") {
-      document.getElementById("stock-type").value = "in";
-      updateStockMode();
-      scrollToTarget("scan-section");
+      openWorkflowSheet("stock", { stockType: "in" });
       await startCameraScan("batch");
       return;
     }
@@ -668,14 +716,12 @@ function bindEvents() {
       return;
     }
     if (action === "batch-check") {
-      scrollToTarget("stock-form");
+      openWorkflowSheet("stock");
       showToast("已定位到批次表单");
       return;
     }
     if (action === "stock-out") {
-      document.getElementById("stock-type").value = "out";
-      updateStockMode();
-      scrollToTarget("scan-section");
+      openWorkflowSheet("stock", { stockType: "out" });
       await startCameraScan("batch");
       return;
     }
@@ -747,6 +793,13 @@ function bindEvents() {
     stopCameraScan();
   });
 
+  document.getElementById("report-sheet-close").addEventListener("click", closeWorkflowSheet);
+  document.getElementById("stock-sheet-close").addEventListener("click", closeWorkflowSheet);
+  document.getElementById("sheet-backdrop").addEventListener("click", closeWorkflowSheet);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeWorkflowSheet();
+  });
+
   document.getElementById("stock-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const batchValue = document.getElementById("stock-batch").value;
@@ -780,9 +833,16 @@ function bindEvents() {
   document.querySelectorAll("[data-scroll]").forEach((button) => {
     button.addEventListener("click", () => {
       const targetId = button.getAttribute("data-scroll");
-      document.querySelectorAll(".bottom-item").forEach((item) => item.classList.remove("active"));
-      button.classList.add("active");
-      scrollToTarget(targetId);
+      if (targetId === "report-section") {
+        openWorkflowSheet("report");
+        return;
+      }
+      if (targetId === "stock-section") {
+        openWorkflowSheet("stock");
+        return;
+      }
+      closeWorkflowSheet();
+      scrollToTarget("sticky-operations");
     });
   });
 }
