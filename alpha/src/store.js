@@ -1,5 +1,9 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  getProcessInputContext,
+  getProcessReportSummary,
+} from "../public/production-metrics.js";
 import { seedData } from "./seed.js";
 
 function clone(value) {
@@ -84,12 +88,6 @@ function assertOrderInput(order) {
   if (!order.route.length) throw new Error("至少需要 1 个工序");
 }
 
-function reportCompletedQty(report) {
-  const explicit = Number(report?.completedQty);
-  if (Number.isFinite(explicit) && explicit > 0) return explicit;
-  return Number(report?.goodQty || 0) + Number(report?.badQty || 0);
-}
-
 function normalizeReportInput(input, order) {
   const goodQty = Number(input.goodQty ?? 0);
   const badQty = Number(input.badQty ?? 0);
@@ -106,36 +104,45 @@ function normalizeReportInput(input, order) {
   };
 }
 
-function assertReportInput(report, order, reportedQty = 0) {
+function assertReportInput(report, order, existingReports = []) {
   const quantities = [report.completedQty, report.goodQty, report.badQty];
   if (!quantities.every((value) => Number.isFinite(value) && Number.isInteger(value) && value >= 0)) {
     throw new Error("报工数量必须是大于或等于 0 的整数");
   }
   if (report.completedQty <= 0) throw new Error("完成数量必须大于 0");
+  if (report.badQty > report.completedQty) throw new Error("不良数量不能大于本次完成数量");
   if (!report.processName) throw new Error("请选择当前工序");
   if (Array.isArray(order.route) && order.route.length && !order.route.some((step) => step.name === report.processName)) {
     throw new Error("所选工序不在当前工艺路线中");
   }
-  const remainingQty = Math.max(0, Number(order.plannedQty || 0) - Number(reportedQty || 0));
-  if (report.completedQty > remainingQty) throw new Error(`完成数量不能超过当前工序剩余数量 ${remainingQty}`);
-  if (report.goodQty + report.badQty > report.completedQty) throw new Error("良品数与不良数之和不能大于完成数量");
+  if (report.completedQty !== report.goodQty + report.badQty) {
+    throw new Error("本次完成数量必须等于良品数与不良数之和");
+  }
+  const inputContext = getProcessInputContext(order, report.processName, existingReports);
+  const processedQty = getProcessReportSummary(order.id, report.processName, existingReports).processedQty;
+  const remainingQty = Math.max(0, inputContext.inputLimit - processedQty);
+  if (report.completedQty > remainingQty) {
+    const upstreamNote =
+      !inputContext.isFirst && inputContext.source === "reported-good"
+        ? `上一工序良品数为 ${inputContext.previousGoodQty}，`
+        : "";
+    throw new Error(`${upstreamNote}本工序最多还可报 ${remainingQty}，不能报 ${report.completedQty}`);
+  }
   if (report.badQty > 0 && !report.badReason) throw new Error("有不良品时必须填写不良原因");
 }
 
 function applyReportProgress(order, existingReports, report) {
-  const processReports = existingReports.filter(
-    (item) => item.workOrderId === order.id && item.processName === report.processName
-  );
-  const processCompletedQty = processReports.reduce((sum, item) => sum + reportCompletedQty(item), 0) + report.completedQty;
+  const allReports = [report, ...existingReports];
   const route = normalizeRoute(order.route).map((step) => ({ ...step }));
   const processIndex = route.findIndex((step) => step.name === report.processName);
 
-  order.doneQty = Math.min(Number(order.plannedQty || 0), Number(order.doneQty || 0) + report.goodQty);
   order.status = "生产中";
 
   if (processIndex < 0) return;
 
-  const processFinished = processCompletedQty >= Number(order.plannedQty || 0);
+  const processSummary = getProcessReportSummary(order.id, report.processName, allReports);
+  const inputContext = getProcessInputContext({ ...order, route }, report.processName, allReports);
+  const processFinished = inputContext.inputLimit > 0 && processSummary.processedQty >= inputContext.inputLimit;
   route[processIndex].status = processFinished ? "已完成" : "进行中";
 
   if (processFinished) {
@@ -152,6 +159,12 @@ function applyReportProgress(order, existingReports, report) {
   }
 
   order.route = route;
+  const finalStep = route[route.length - 1];
+  const finalSummary = finalStep ? getProcessReportSummary(order.id, finalStep.name, allReports) : null;
+  order.doneQty =
+    finalStep?.status === "已完成"
+      ? Math.min(Number(order.plannedQty || 0), Number(finalSummary?.goodQty || 0))
+      : 0;
 }
 
 function normalizeStockMovementInput(input, fallback = {}) {
@@ -354,10 +367,7 @@ async function createFileStore(rootDir) {
       const order = state.workOrders.find((item) => item.id === input.workOrderId);
       if (!order) throw new Error("工单不存在");
       const normalized = normalizeReportInput(input, order);
-      const reportedQty = state.reports
-        .filter((item) => item.workOrderId === order.id && item.processName === normalized.processName)
-        .reduce((sum, item) => sum + reportCompletedQty(item), 0);
-      assertReportInput(normalized, order, reportedQty);
+      assertReportInput(normalized, order, state.reports);
       const report = {
         id: makeId("rep"),
         ...normalized,
@@ -555,11 +565,13 @@ async function createPostgresStore() {
           route: orderRow.route,
         };
         const normalized = normalizeReportInput(input, order);
-        const reportedResult = await client.query(
-          "select coalesce(sum(case when completed_qty > 0 then completed_qty else good_qty + bad_qty end), 0) as total from reports where work_order_id=$1 and process_name=$2",
-          [order.id, normalized.processName]
-        );
-        assertReportInput(normalized, order, Number(reportedResult.rows[0]?.total || 0));
+        const existingReports = (
+          await client.query(
+            'select work_order_id as "workOrderId", process_name as "processName", completed_qty as "completedQty", good_qty as "goodQty", bad_qty as "badQty" from reports where work_order_id=$1',
+            [order.id]
+          )
+        ).rows;
+        assertReportInput(normalized, order, existingReports);
         const report = {
           id: makeId("rep"),
           ...normalized,
@@ -580,12 +592,6 @@ async function createPostgresStore() {
             report.createdAt,
           ]
         );
-        const existingReports = (
-          await client.query(
-            'select work_order_id as "workOrderId", process_name as "processName", completed_qty as "completedQty", good_qty as "goodQty", bad_qty as "badQty" from reports where work_order_id=$1 and id<>$2',
-            [report.workOrderId, report.id]
-          )
-        ).rows;
         applyReportProgress(order, existingReports, report);
         await client.query(
           "update work_orders set done_qty=$1, current_process=$2, status=$3, route=$4 where id=$5",

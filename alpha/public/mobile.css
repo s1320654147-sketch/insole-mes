@@ -493,7 +493,7 @@ body.sheet-open {
 
 .report-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -524,6 +524,21 @@ body.sheet-open {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.process-input-note {
+  padding: 8px 10px;
+  border-left: 3px solid #60a5fa;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #1e3a8a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mobile-form input[readonly] {
+  background: #f1f5f9;
+  color: var(--muted);
 }
 
 .scan-actions {

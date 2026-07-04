@@ -3,8 +3,10 @@ const adminTokenKey = "insole_mes_alpha_token_admin";
 
 import QrScanner from "/vendor/qr-scanner/qr-scanner.min.js";
 import {
+  getProcessInputContext as calculateProcessInputContext,
   getProcessReportedQty as calculateProcessReportedQty,
   getRemainingReportableQty as calculateRemainingReportableQty,
+  getWorkOrderFlowSummary as calculateWorkOrderFlowSummary,
   validateReportPayload,
 } from "./production-metrics.js";
 
@@ -91,6 +93,20 @@ function getProcessReportedQty(orderId, processName) {
 
 function getRemainingReportableQty(order, processName) {
   return calculateRemainingReportableQty(order, processName, mobileState.data?.reports || []);
+}
+
+function getProcessInputContext(order, processName) {
+  return calculateProcessInputContext(order, processName, mobileState.data?.reports || []);
+}
+
+function getWorkOrderFlowSummary(order) {
+  return calculateWorkOrderFlowSummary(order, mobileState.data?.reports || []);
+}
+
+function syncDerivedGoodQty() {
+  const completedQty = Number(document.getElementById("completed-qty").value || 0);
+  const badQty = Number(document.getElementById("bad-qty").value || 0);
+  document.getElementById("good-qty").value = String(Math.max(0, completedQty - badQty));
 }
 
 function daysUntil(dateValue) {
@@ -271,7 +287,10 @@ function renderTasks() {
 
   root.innerHTML = workOrders
     .map((order) => {
-      const progress = order.plannedQty ? Math.round((Number(order.doneQty || 0) / Number(order.plannedQty)) * 100) : 0;
+      const flow = getWorkOrderFlowSummary(order);
+      const progress = order.plannedQty
+        ? Math.round((Number(flow.currentTransferableGoodQty || 0) / Number(order.plannedQty)) * 100)
+        : 0;
       const isSelected = order.id === mobileState.selectedOrderId;
       const pendingClass = order.status === "待领料" || order.status === "待开始" ? "pending" : "";
       return `
@@ -290,7 +309,7 @@ function renderTasks() {
           <div class="progress-bar"><div class="progress-fill" style="width:${Math.max(0, Math.min(100, progress))}%"></div></div>
           <div class="task-footer">
             <span>计划 ${order.plannedQty} 双</span>
-            <span>完成 ${order.doneQty} 双</span>
+            <span>可流转 ${flow.currentTransferableGoodQty} · 成品 ${flow.finishedGoodQty}</span>
           </div>
         </button>
       `;
@@ -343,8 +362,18 @@ function renderMobileReportForm() {
   const selectedStage = stageSelect.value;
   const reportedQty = order ? getProcessReportedQty(order.id, selectedStage) : 0;
   const remainingQty = order ? getRemainingReportableQty(order, selectedStage) : 0;
+  const inputContext = order ? getProcessInputContext(order, selectedStage) : null;
   const stageIndex = stages.findIndex((stage) => stage.name === selectedStage);
   const selectedStageData = stages[stageIndex] || null;
+  const inputDescription = !inputContext
+    ? ""
+    : inputContext.isFirst
+      ? `首道工序，输入上限为计划数 ${inputContext.inputLimit}`
+      : inputContext.source === "reported-good"
+        ? `上道 ${inputContext.previousProcessName} 良品 ${inputContext.previousGoodQty}，本工序最多可报 ${inputContext.inputLimit}`
+        : inputContext.source === "legacy-route"
+          ? `上道 ${inputContext.previousProcessName} 缺少历史报工，暂按计划数 ${inputContext.inputLimit} 兼容`
+          : `上道 ${inputContext.previousProcessName || "工序"} 尚无可流转良品，当前不能报工`;
   const summary = document.getElementById("report-order-summary");
   summary.innerHTML = order
     ? `
@@ -357,7 +386,8 @@ function renderMobileReportForm() {
       </div>
       <div class="report-summary-grid">
         <div><span>计划</span><strong>${Number(order.plannedQty || 0)}</strong></div>
-        <div><span>已报</span><strong>${reportedQty}</strong></div>
+        <div><span>输入上限</span><strong>${Number(inputContext?.inputLimit || 0)}</strong></div>
+        <div><span>本工序已报</span><strong>${reportedQty}</strong></div>
         <div><span>剩余</span><strong>${remainingQty}</strong></div>
       </div>
       <div class="process-description">
@@ -365,6 +395,7 @@ function renderMobileReportForm() {
         ${escapeHtml(selectedStage || "未配置工序")} ·
         ${escapeHtml(selectedStageData?.status || "状态未知")}
       </div>
+      <div class="process-input-note">${escapeHtml(inputDescription)}</div>
     `
     : '<div class="empty-state">请先扫码或选择一张工单。</div>';
 
@@ -796,18 +827,12 @@ function bindEvents() {
 
   document.getElementById("report-stage").addEventListener("change", renderMobileReportForm);
 
-  document.getElementById("completed-qty").addEventListener("input", () => {
-    const completedQty = Number(document.getElementById("completed-qty").value || 0);
-    const goodInput = document.getElementById("good-qty");
-    const badQty = Number(document.getElementById("bad-qty").value || 0);
-    if (Number(goodInput.value || 0) === 0 && badQty === 0 && completedQty > 0) {
-      goodInput.value = String(completedQty);
-    }
-  });
+  document.getElementById("completed-qty").addEventListener("input", syncDerivedGoodQty);
 
   document.getElementById("bad-qty").addEventListener("input", () => {
     const badQty = Number(document.getElementById("bad-qty").value || 0);
     document.getElementById("bad-reason").classList.toggle("required-field", badQty > 0);
+    syncDerivedGoodQty();
   });
 
   document.getElementById("mobile-report-form").addEventListener("submit", async (event) => {

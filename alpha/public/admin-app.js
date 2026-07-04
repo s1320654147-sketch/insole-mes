@@ -140,6 +140,10 @@ function getWorkOrderQualitySummary(order) {
   return calculateWorkOrderQuality(order, state.data?.reports || []);
 }
 
+function getOrderDisplayStatus(order, quality = getWorkOrderQualitySummary(order)) {
+  return quality.hasFinalShortage ? "已完成，有短缺" : order.status || "未设置状态";
+}
+
 function matchesOrderFilter(order, filterKey) {
   return matchesWorkOrderFilter(order, filterKey, state.data?.reports || [], state.data?.alerts || []);
 }
@@ -152,8 +156,8 @@ function renderDueDateBadge(order) {
 function renderQualityBadge(order) {
   const quality = getWorkOrderQualitySummary(order);
   const badRate = quality.badRate === null ? "暂无" : `${quality.badRate.toFixed(1)}%`;
-  const className = quality.badQty > 0 ? "quality-badge risk" : "quality-badge";
-  return `<span class="${className}">良 ${quality.goodQty} · 不良 ${quality.badQty} · ${badRate}</span>`;
+  const className = quality.badQty > 0 || quality.hasFinalShortage ? "quality-badge risk" : "quality-badge";
+  return `<span class="${className}">成品 ${quality.finishedGoodQty} · 可流转 ${quality.currentTransferableGoodQty} · 累计不良 ${quality.badQty} · ${badRate}</span>`;
 }
 
 function renderProcessProgress(order, compact = false) {
@@ -419,17 +423,20 @@ function renderDashboard() {
   renderStats();
 
   renderList("focus-orders", state.data.workOrders, (order) => {
+    const quality = getWorkOrderQualitySummary(order);
+    const statusText = getOrderDisplayStatus(order, quality);
     return `
       <div class="list-item">
         <div class="item-top">
           <div class="item-title">${escapeHtml(order.id)} · ${escapeHtml(order.product)}</div>
-          <span class="status ${normalizeStatus(order.status)}">${escapeHtml(order.status)}</span>
+          <span class="status ${normalizeStatus(quality.hasFinalShortage ? "延期" : order.status)}">${escapeHtml(statusText)}</span>
         </div>
         <div class="item-meta">当前工序：${escapeHtml(order.currentProcess)} · 交期：${escapeHtml(order.dueAt)}</div>
         <div class="progress-row">
-          <div class="progress-label"><span>完成进度</span><span>${order.doneQty}/${order.plannedQty}</span></div>
-          <div class="progress-bar"><div class="progress-fill" style="width:${percent(order.doneQty, order.plannedQty)}%"></div></div>
+          <div class="progress-label"><span>成品良品</span><span>${quality.finishedGoodQty}/${order.plannedQty}</span></div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${percent(quality.finishedGoodQty, order.plannedQty)}%"></div></div>
         </div>
+        <div class="item-meta">当前可流转 ${quality.currentTransferableGoodQty} · 累计报工 ${quality.completedQty}</div>
       </div>
     `;
   });
@@ -691,6 +698,7 @@ function renderOrders() {
           .map((order) => {
             const quality = getWorkOrderQualitySummary(order);
             const progress = getProcessProgressSummary(order);
+            const statusText = getOrderDisplayStatus(order, quality);
             return `
               <button class="order-execution-card ${order.id === state.selectedOrderId && state.orderEditorMode === "edit" ? "active" : ""}" type="button" data-order-id="${escapeHtml(order.id)}">
                 <div class="order-execution-head">
@@ -700,26 +708,28 @@ function renderOrders() {
                   </div>
                   <div class="order-badges">
                     ${["高", "加急"].includes(order.priority) ? '<span class="priority-badge">加急</span>' : ""}
-                    <span class="status ${normalizeStatus(order.status)}">${escapeHtml(order.status || "未设置状态")}</span>
+                    <span class="status ${normalizeStatus(quality.hasFinalShortage ? "延期" : order.status)}">${escapeHtml(statusText)}</span>
                   </div>
                 </div>
                 <div class="order-metric-grid">
                   <div><span>计划</span><strong>${Number(order.plannedQty || 0)}</strong></div>
-                  <div><span>已完成</span><strong>${Number(order.doneQty || 0)}</strong></div>
-                  <div><span>良品</span><strong>${quality.goodQty}</strong></div>
-                  <div><span>不良</span><strong class="${quality.badQty > 0 ? "danger-text" : ""}">${quality.badQty}</strong></div>
-                  <div><span>不良率</span><strong>${quality.badRate === null ? "暂无" : `${quality.badRate.toFixed(1)}%`}</strong></div>
+                  <div><span>成品良品</span><strong>${quality.finishedGoodQty}</strong></div>
+                  <div><span>当前可流转</span><strong>${quality.currentTransferableGoodQty}</strong></div>
+                  <div><span>累计报工</span><strong>${quality.completedQty}</strong></div>
+                  <div><span>累计不良</span><strong class="${quality.badQty > 0 ? "danger-text" : ""}">${quality.badQty}</strong></div>
+                  <div><span>过程不良率</span><strong>${quality.badRate === null ? "暂无" : `${quality.badRate.toFixed(1)}%`}</strong></div>
                 </div>
                 <div class="order-context-row">
                   <span>当前工序：<strong>${escapeHtml(order.currentProcess || "未配置工序")}</strong></span>
                   ${renderDueDateBadge(order)}
                   <span class="label-state">${order.id ? "二维码 / 标签已配置" : "未生成标签"}</span>
+                  ${quality.hasFinalShortage ? `<span class="shortage-badge">最终良品少于计划 ${quality.shortageQty}</span>` : ""}
                 </div>
                 ${renderProcessProgress(order, true)}
                 <div class="order-execution-foot">
-                  <span>总体数量 ${Number(order.doneQty || 0)}/${Number(order.plannedQty || 0)}</span>
+                  <span>成品 ${quality.finishedGoodQty}/${Number(order.plannedQty || 0)}</span>
+                  <span>可流转 ${quality.currentTransferableGoodQty}</span>
                   <span>工序 ${progress.completed}/${progress.total || 0}</span>
-                  <span>累计报工 ${quality.completedQty}</span>
                 </div>
               </button>
             `;
@@ -768,21 +778,22 @@ function renderOrderDetail() {
                   </div>
                   <div class="order-badges">
                     ${["高", "加急"].includes(order.priority) ? '<span class="priority-badge">加急</span>' : ""}
-                    <span class="status ${normalizeStatus(order.status)}">${escapeHtml(order.status || "未设置状态")}</span>
+                    <span class="status ${normalizeStatus(quality.hasFinalShortage ? "延期" : order.status)}">${escapeHtml(getOrderDisplayStatus(order, quality))}</span>
                     <span class="due-badge ${dueRisk.key}">${escapeHtml(dueRisk.label)}</span>
                   </div>
                 </div>
                 <div class="execution-kpis">
                   <div><span>计划数量</span><strong>${Number(order.plannedQty || 0)}</strong></div>
-                  <div><span>已完成</span><strong>${Number(order.doneQty || 0)}</strong></div>
+                  <div><span>成品良品</span><strong>${quality.finishedGoodQty}</strong></div>
+                  <div><span>当前可流转</span><strong>${quality.currentTransferableGoodQty}</strong></div>
                   <div><span>累计报工</span><strong>${quality.completedQty}</strong></div>
-                  <div><span>良品</span><strong>${quality.goodQty}</strong></div>
-                  <div><span>不良</span><strong class="${quality.badQty > 0 ? "danger-text" : ""}">${quality.badQty}</strong></div>
-                  <div><span>不良率</span><strong>${quality.badRate === null ? "暂无" : `${quality.badRate.toFixed(1)}%`}</strong></div>
+                  <div><span>累计不良</span><strong class="${quality.badQty > 0 ? "danger-text" : ""}">${quality.badQty}</strong></div>
+                  <div><span>过程不良率</span><strong>${quality.badRate === null ? "暂无" : `${quality.badRate.toFixed(1)}%`}</strong></div>
                 </div>
+                ${quality.hasFinalShortage ? `<div class="shortage-alert">流程已完成，但最终良品比计划少 ${quality.shortageQty}，请确认补产、返工或按短缺完结。</div>` : ""}
                 <div class="progress-row">
-                  <div class="progress-label"><span>总体数量</span><span>${Number(order.doneQty || 0)}/${Number(order.plannedQty || 0)}</span></div>
-                  <div class="progress-bar"><div class="progress-fill" style="width:${percent(order.doneQty, order.plannedQty)}%"></div></div>
+                  <div class="progress-label"><span>成品产出</span><span>${quality.finishedGoodQty}/${Number(order.plannedQty || 0)}</span></div>
+                  <div class="progress-bar"><div class="progress-fill" style="width:${percent(quality.finishedGoodQty, order.plannedQty)}%"></div></div>
                 </div>
               </div>
               <div class="detail-block">
@@ -1151,15 +1162,19 @@ function renderReporting() {
   renderList(
     "reporting-queue",
     state.data.workOrders,
-    (order) => `
-      <div class="list-item">
-        <div class="item-top">
-          <div class="item-title">${escapeHtml(order.id)} · ${escapeHtml(order.product)}</div>
-          <span class="status ${normalizeStatus(order.status)}">${escapeHtml(order.currentProcess)}</span>
+    (order) => {
+      const quality = getWorkOrderQualitySummary(order);
+      return `
+        <div class="list-item">
+          <div class="item-top">
+            <div class="item-title">${escapeHtml(order.id)} · ${escapeHtml(order.product)}</div>
+            <span class="status ${normalizeStatus(quality.hasFinalShortage ? "延期" : order.status)}">${escapeHtml(order.currentProcess)}</span>
+          </div>
+          <div class="item-meta">优先级 ${escapeHtml(order.priority)} · 可流转 ${quality.currentTransferableGoodQty} · 成品 ${quality.finishedGoodQty}/${order.plannedQty}</div>
+          ${quality.hasFinalShortage ? `<div class="item-note danger-text">最终良品少于计划 ${quality.shortageQty}</div>` : ""}
         </div>
-        <div class="item-meta">优先级 ${escapeHtml(order.priority)} · 当前完成 ${order.doneQty}/${order.plannedQty}</div>
-      </div>
-    `
+      `;
+    }
   );
 
   document.getElementById("report-table").innerHTML = `
