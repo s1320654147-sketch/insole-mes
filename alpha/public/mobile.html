@@ -82,25 +82,35 @@
               <video id="workorder-scan-video" playsinline muted></video>
             </div>
           </div>
+          <div class="report-order-summary" id="report-order-summary"></div>
           <form id="mobile-report-form" class="mobile-form">
             <label>
               当前工序
               <select id="report-stage"></select>
             </label>
+            <label>
+              本次完成数量
+              <input id="completed-qty" type="number" min="0" step="1" inputmode="numeric" value="0" />
+            </label>
             <div class="number-grid">
               <label>
                 良品数
-                <input id="good-qty" type="number" min="0" inputmode="numeric" value="0" />
+                <input id="good-qty" type="number" min="0" step="1" inputmode="numeric" value="0" />
               </label>
               <label>
                 不良数
-                <input id="bad-qty" type="number" min="0" inputmode="numeric" value="0" />
+                <input id="bad-qty" type="number" min="0" step="1" inputmode="numeric" value="0" />
               </label>
             </div>
             <label>
-              异常备注
-              <textarea id="report-note" rows="3" placeholder="例如：缺料、设备调整、尺寸偏差"></textarea>
+              不良原因
+              <input id="bad-reason" type="text" placeholder="有不良品时必填，例如：来料毛边、压制尺寸偏差" />
             </label>
+            <label>
+              备注（选填）
+              <textarea id="report-note" rows="2" placeholder="例如：设备调整、缺料、需要复核"></textarea>
+            </label>
+            <div class="form-error hidden" id="report-form-error"></div>
             <button class="submit-button" id="report-submit-btn" type="submit">提交报工</button>
           </form>
         </section>

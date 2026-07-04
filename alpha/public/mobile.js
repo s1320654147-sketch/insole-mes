@@ -2,6 +2,11 @@
 const adminTokenKey = "insole_mes_alpha_token_admin";
 
 import QrScanner from "/vendor/qr-scanner/qr-scanner.min.js";
+import {
+  getProcessReportedQty as calculateProcessReportedQty,
+  getRemainingReportableQty as calculateRemainingReportableQty,
+  validateReportPayload,
+} from "./production-metrics.js";
 
 const mobileState = {
   selectedOrderId: "",
@@ -9,6 +14,7 @@ const mobileState = {
   data: null,
   scanValue: "",
   workOrderScanValue: "",
+  reportSubmitting: false,
 };
 
 const scanState = {
@@ -73,6 +79,18 @@ function showToast(message) {
 
 function currentOrder() {
   return mobileState.data?.workOrders?.find((order) => order.id === mobileState.selectedOrderId) || null;
+}
+
+function escapeHtml(value = "") {
+  return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+}
+
+function getProcessReportedQty(orderId, processName) {
+  return calculateProcessReportedQty(orderId, processName, mobileState.data?.reports || []);
+}
+
+function getRemainingReportableQty(order, processName) {
+  return calculateRemainingReportableQty(order, processName, mobileState.data?.reports || []);
 }
 
 function daysUntil(dateValue) {
@@ -260,14 +278,14 @@ function renderTasks() {
         <button class="task-card ${isSelected ? "active" : ""}" data-order-id="${order.id}">
           <div class="task-top">
             <div>
-              <div class="task-title">${order.product}</div>
-              <div class="task-code">${order.id}</div>
+              <div class="task-title" title="${escapeHtml(order.product || "未填写产品")}">${escapeHtml(order.product || "未填写产品")}</div>
+              <div class="task-code">${escapeHtml(order.id || "未编号")}</div>
             </div>
-            <span class="status ${pendingClass}">${order.status}</span>
+            <span class="status ${pendingClass}">${escapeHtml(order.status || "未设置状态")}</span>
           </div>
           <div class="task-meta">
-            <span>当前：${order.currentProcess}</span>
-            <span>交期：${order.dueAt}</span>
+            <span>当前：${escapeHtml(order.currentProcess || "未配置工序")}</span>
+            <span>交期：${escapeHtml(order.dueAt || "未设置")}</span>
           </div>
           <div class="progress-bar"><div class="progress-fill" style="width:${Math.max(0, Math.min(100, progress))}%"></div></div>
           <div class="task-footer">
@@ -290,15 +308,24 @@ function renderTasks() {
   });
 }
 
-function renderReportForm() {
+function renderMobileReportForm() {
   const order = currentOrder();
   const stageSelect = document.getElementById("report-stage");
-  const disabled = !order;
+  const route = Array.isArray(order?.route) ? order.route.filter((stage) => stage?.name) : [];
+  const fallbackStages = order?.currentProcess ? [{ name: order.currentProcess, status: "进行中" }] : [];
+  const stages = route.length ? route : fallbackStages;
+  const previousStage = stageSelect.value;
+  const disabled = !order || !stages.length;
 
   document.getElementById("selected-order-label").textContent = order ? order.id : "暂无工单";
-  stageSelect.innerHTML = order
-    ? (order.route || []).map((stage) => `<option value="${stage.name}" ${stage.name === order.currentProcess ? "selected" : ""}>${stage.name}</option>`).join("")
+  stageSelect.innerHTML = stages.length
+    ? stages.map((stage) => `<option value="${escapeHtml(stage.name)}">${escapeHtml(stage.name)}</option>`).join("")
     : '<option value="">暂无可报工工单</option>';
+  if (stages.some((stage) => stage.name === previousStage)) {
+    stageSelect.value = previousStage;
+  } else if (order?.currentProcess && stages.some((stage) => stage.name === order.currentProcess)) {
+    stageSelect.value = order.currentProcess;
+  }
 
   const workOrderInput = document.getElementById("workorder-scan-input");
   const workOrderPreview = document.getElementById("workorder-scan-preview");
@@ -313,10 +340,49 @@ function renderReportForm() {
     workOrderPreview.textContent = order ? `当前工单：${order.id} / ${order.product} / 当前工序 ${order.currentProcess}` : "未识别工单";
   }
 
-  ["report-stage", "good-qty", "bad-qty", "report-note", "report-submit-btn"].forEach((id) => {
+  const selectedStage = stageSelect.value;
+  const reportedQty = order ? getProcessReportedQty(order.id, selectedStage) : 0;
+  const remainingQty = order ? getRemainingReportableQty(order, selectedStage) : 0;
+  const stageIndex = stages.findIndex((stage) => stage.name === selectedStage);
+  const selectedStageData = stages[stageIndex] || null;
+  const summary = document.getElementById("report-order-summary");
+  summary.innerHTML = order
+    ? `
+      <div class="report-order-head">
+        <div>
+          <strong title="${escapeHtml(order.product || "未填写产品")}">${escapeHtml(order.product || "未填写产品")}</strong>
+          <span>${escapeHtml(order.id || "未编号")}</span>
+        </div>
+        <span class="mobile-status">${escapeHtml(order.status || "未设置状态")}</span>
+      </div>
+      <div class="report-summary-grid">
+        <div><span>计划</span><strong>${Number(order.plannedQty || 0)}</strong></div>
+        <div><span>已报</span><strong>${reportedQty}</strong></div>
+        <div><span>剩余</span><strong>${remainingQty}</strong></div>
+      </div>
+      <div class="process-description">
+        第 ${stageIndex >= 0 ? stageIndex + 1 : "-"} / ${stages.length || "-"} 道 ·
+        ${escapeHtml(selectedStage || "未配置工序")} ·
+        ${escapeHtml(selectedStageData?.status || "状态未知")}
+      </div>
+    `
+    : '<div class="empty-state">请先扫码或选择一张工单。</div>';
+
+  const completedInput = document.getElementById("completed-qty");
+  completedInput.max = String(remainingQty);
+  completedInput.setAttribute("aria-describedby", "report-order-summary");
+
+  ["report-stage", "completed-qty", "good-qty", "bad-qty", "bad-reason", "report-note", "report-submit-btn"].forEach((id) => {
     document.getElementById(id).disabled = disabled;
   });
+  document.getElementById("report-submit-btn").disabled = disabled || remainingQty <= 0 || mobileState.reportSubmitting;
+  document.getElementById("report-submit-btn").textContent = mobileState.reportSubmitting ? "正在提交…" : remainingQty <= 0 && order ? "当前工序已报完" : "提交报工";
+  const errorRoot = document.getElementById("report-form-error");
+  errorRoot.classList.add("hidden");
+  errorRoot.textContent = "";
 }
+
+const renderReportForm = renderMobileReportForm;
 
 function updateStockMode() {
   const type = document.getElementById("stock-type")?.value || "in";
@@ -728,30 +794,71 @@ function bindEvents() {
     showToast("已处理");
   });
 
+  document.getElementById("report-stage").addEventListener("change", renderMobileReportForm);
+
+  document.getElementById("completed-qty").addEventListener("input", () => {
+    const completedQty = Number(document.getElementById("completed-qty").value || 0);
+    const goodInput = document.getElementById("good-qty");
+    const badQty = Number(document.getElementById("bad-qty").value || 0);
+    if (Number(goodInput.value || 0) === 0 && badQty === 0 && completedQty > 0) {
+      goodInput.value = String(completedQty);
+    }
+  });
+
+  document.getElementById("bad-qty").addEventListener("input", () => {
+    const badQty = Number(document.getElementById("bad-qty").value || 0);
+    document.getElementById("bad-reason").classList.toggle("required-field", badQty > 0);
+  });
+
   document.getElementById("mobile-report-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!mobileState.selectedOrderId) {
+    if (!mobileState.selectedOrderId || mobileState.reportSubmitting) {
       showToast("当前没有可报工工单");
       return;
     }
+    const order = currentOrder();
+    const processName = document.getElementById("report-stage").value;
+    const remainingQty = getRemainingReportableQty(order, processName);
+    const payload = {
+      workOrderId: mobileState.selectedOrderId,
+      processName,
+      completedQty: Number(document.getElementById("completed-qty").value),
+      goodQty: Number(document.getElementById("good-qty").value),
+      badQty: Number(document.getElementById("bad-qty").value),
+      badReason: document.getElementById("bad-reason").value.trim(),
+      note: document.getElementById("report-note").value.trim(),
+    };
+    const validationError = validateReportPayload(payload, remainingQty);
+    const errorRoot = document.getElementById("report-form-error");
+    if (validationError) {
+      errorRoot.textContent = validationError;
+      errorRoot.classList.remove("hidden");
+      showToast(validationError);
+      return;
+    }
+
+    mobileState.reportSubmitting = true;
+    renderMobileReportForm();
     try {
       const result = await api("/api/reports", {
         method: "POST",
-        body: JSON.stringify({
-          workOrderId: mobileState.selectedOrderId,
-          processName: document.getElementById("report-stage").value,
-          goodQty: Number(document.getElementById("good-qty").value || 0),
-          badQty: Number(document.getElementById("bad-qty").value || 0),
-          note: document.getElementById("report-note").value.trim(),
-        }),
+        body: JSON.stringify(payload),
       });
       mobileState.data = result.state;
+      document.getElementById("completed-qty").value = "0";
       document.getElementById("good-qty").value = "0";
       document.getElementById("bad-qty").value = "0";
+      document.getElementById("bad-reason").value = "";
+      document.getElementById("bad-reason").classList.remove("required-field");
       document.getElementById("report-note").value = "";
+      mobileState.reportSubmitting = false;
       renderAll();
       showToast("报工已同步到管理端");
     } catch (error) {
+      mobileState.reportSubmitting = false;
+      renderMobileReportForm();
+      errorRoot.textContent = error.message;
+      errorRoot.classList.remove("hidden");
       showToast(error.message);
     }
   });

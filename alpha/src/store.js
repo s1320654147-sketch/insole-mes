@@ -81,8 +81,77 @@ function assertOrderInput(order) {
   if (!order.product) throw new Error("产品名称不能为空");
   if (!Number.isFinite(order.plannedQty) || order.plannedQty <= 0) throw new Error("计划数量必须大于 0");
   if (!order.currentProcess) throw new Error("当前工序不能为空");
-  if (!order.dueAt) throw new Error("交期不能为空");
   if (!order.route.length) throw new Error("至少需要 1 个工序");
+}
+
+function reportCompletedQty(report) {
+  const explicit = Number(report?.completedQty);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return Number(report?.goodQty || 0) + Number(report?.badQty || 0);
+}
+
+function normalizeReportInput(input, order) {
+  const goodQty = Number(input.goodQty ?? 0);
+  const badQty = Number(input.badQty ?? 0);
+  const fallbackCompleted = goodQty + badQty;
+  return {
+    workOrderId: String(input.workOrderId || "").trim(),
+    processName: String(input.processName || order?.currentProcess || "").trim(),
+    completedQty: Number(input.completedQty ?? fallbackCompleted),
+    goodQty,
+    badQty,
+    badReason: String(input.badReason || "").trim(),
+    note: String(input.note || "").trim(),
+    operator: String(input.operator || "").trim(),
+  };
+}
+
+function assertReportInput(report, order, reportedQty = 0) {
+  const quantities = [report.completedQty, report.goodQty, report.badQty];
+  if (!quantities.every((value) => Number.isFinite(value) && Number.isInteger(value) && value >= 0)) {
+    throw new Error("报工数量必须是大于或等于 0 的整数");
+  }
+  if (report.completedQty <= 0) throw new Error("完成数量必须大于 0");
+  if (!report.processName) throw new Error("请选择当前工序");
+  if (Array.isArray(order.route) && order.route.length && !order.route.some((step) => step.name === report.processName)) {
+    throw new Error("所选工序不在当前工艺路线中");
+  }
+  const remainingQty = Math.max(0, Number(order.plannedQty || 0) - Number(reportedQty || 0));
+  if (report.completedQty > remainingQty) throw new Error(`完成数量不能超过当前工序剩余数量 ${remainingQty}`);
+  if (report.goodQty + report.badQty > report.completedQty) throw new Error("良品数与不良数之和不能大于完成数量");
+  if (report.badQty > 0 && !report.badReason) throw new Error("有不良品时必须填写不良原因");
+}
+
+function applyReportProgress(order, existingReports, report) {
+  const processReports = existingReports.filter(
+    (item) => item.workOrderId === order.id && item.processName === report.processName
+  );
+  const processCompletedQty = processReports.reduce((sum, item) => sum + reportCompletedQty(item), 0) + report.completedQty;
+  const route = normalizeRoute(order.route).map((step) => ({ ...step }));
+  const processIndex = route.findIndex((step) => step.name === report.processName);
+
+  order.doneQty = Math.min(Number(order.plannedQty || 0), Number(order.doneQty || 0) + report.goodQty);
+  order.status = "生产中";
+
+  if (processIndex < 0) return;
+
+  const processFinished = processCompletedQty >= Number(order.plannedQty || 0);
+  route[processIndex].status = processFinished ? "已完成" : "进行中";
+
+  if (processFinished) {
+    const nextStep = route[processIndex + 1];
+    if (nextStep) {
+      if (nextStep.status !== "已完成") nextStep.status = "进行中";
+      order.currentProcess = nextStep.name;
+    } else {
+      order.currentProcess = route[processIndex].name;
+      order.status = "已完成";
+    }
+  } else {
+    order.currentProcess = route[processIndex].name;
+  }
+
+  order.route = route;
 }
 
 function normalizeStockMovementInput(input, fallback = {}) {
@@ -147,7 +216,7 @@ function serializeStateForRole(data, role) {
     const workOrders = state.workOrders.filter((item) => item.status !== "已完成");
     const materials = state.materials;
     const alerts = state.alerts.filter((item) => item.status === "open");
-    const reports = state.reports.slice(0, 30);
+    const reports = state.reports.slice(0, 200);
     const stockMovements = state.stockMovements.slice(0, 30);
     return {
       samples: [],
@@ -284,33 +353,31 @@ async function createFileStore(rootDir) {
       const state = await readState();
       const order = state.workOrders.find((item) => item.id === input.workOrderId);
       if (!order) throw new Error("工单不存在");
-      const goodQty = Number(input.goodQty || 0);
-      const badQty = Number(input.badQty || 0);
+      const normalized = normalizeReportInput(input, order);
+      const reportedQty = state.reports
+        .filter((item) => item.workOrderId === order.id && item.processName === normalized.processName)
+        .reduce((sum, item) => sum + reportCompletedQty(item), 0);
+      assertReportInput(normalized, order, reportedQty);
       const report = {
         id: makeId("rep"),
-        workOrderId: input.workOrderId,
-        processName: input.processName || order.currentProcess,
-        goodQty,
-        badQty,
-        note: input.note || "",
-        operator: input.operator,
+        ...normalized,
         createdAt: new Date().toISOString(),
       };
-      order.doneQty = Math.min(order.plannedQty, Number(order.doneQty || 0) + goodQty);
+      applyReportProgress(order, state.reports, report);
       state.reports.unshift(report);
       state.activities.unshift({
         id: makeId("act"),
         title: `${order.id} 提交${report.processName}报工`,
         meta: `${input.operator} · 刚刚`,
-        note: `良品 ${goodQty}，不良 ${badQty}${report.note ? `，${report.note}` : ""}`,
+        note: `完成 ${report.completedQty}，良品 ${report.goodQty}，不良 ${report.badQty}${report.badReason ? `，${report.badReason}` : ""}`,
         createdAt: report.createdAt,
       });
-      if (badQty > 0 || report.note) {
+      if (report.badQty > 0 || report.note) {
         state.alerts.unshift({
           id: makeId("al"),
           title: `${order.id} 现场异常`,
-          text: `${report.processName} 备注：${report.note || `不良 ${badQty}`}`,
-          severity: badQty > 0 ? "high" : "medium",
+          text: `${report.processName}：${report.badReason || report.note || `不良 ${report.badQty}`}`,
+          severity: report.badQty > 0 ? "high" : "medium",
           status: "open",
           createdAt: report.createdAt,
         });
@@ -477,38 +544,66 @@ async function createPostgresStore() {
       try {
         await client.query("begin");
         const orderResult = await client.query("select * from work_orders where id=$1 for update", [input.workOrderId]);
-        const order = orderResult.rows[0];
-        if (!order) throw new Error("工单不存在");
-        const goodQty = Number(input.goodQty || 0);
-        const badQty = Number(input.badQty || 0);
+        const orderRow = orderResult.rows[0];
+        if (!orderRow) throw new Error("工单不存在");
+        const order = {
+          id: orderRow.id,
+          plannedQty: Number(orderRow.planned_qty || 0),
+          doneQty: Number(orderRow.done_qty || 0),
+          currentProcess: orderRow.current_process,
+          status: orderRow.status,
+          route: orderRow.route,
+        };
+        const normalized = normalizeReportInput(input, order);
+        const reportedResult = await client.query(
+          "select coalesce(sum(case when completed_qty > 0 then completed_qty else good_qty + bad_qty end), 0) as total from reports where work_order_id=$1 and process_name=$2",
+          [order.id, normalized.processName]
+        );
+        assertReportInput(normalized, order, Number(reportedResult.rows[0]?.total || 0));
         const report = {
           id: makeId("rep"),
-          workOrderId: input.workOrderId,
-          processName: input.processName || order.current_process,
-          goodQty,
-          badQty,
-          note: input.note || "",
-          operator: input.operator,
+          ...normalized,
           createdAt: new Date().toISOString(),
         };
         await client.query(
-          "insert into reports(id, work_order_id, process_name, good_qty, bad_qty, note, operator, created_at) values($1,$2,$3,$4,$5,$6,$7,$8)",
-          [report.id, report.workOrderId, report.processName, report.goodQty, report.badQty, report.note, report.operator, report.createdAt]
+          "insert into reports(id, work_order_id, process_name, completed_qty, good_qty, bad_qty, bad_reason, note, operator, created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+          [
+            report.id,
+            report.workOrderId,
+            report.processName,
+            report.completedQty,
+            report.goodQty,
+            report.badQty,
+            report.badReason,
+            report.note,
+            report.operator,
+            report.createdAt,
+          ]
         );
-        await client.query("update work_orders set done_qty=least(planned_qty, done_qty + $1) where id=$2", [goodQty, report.workOrderId]);
+        const existingReports = (
+          await client.query(
+            'select work_order_id as "workOrderId", process_name as "processName", completed_qty as "completedQty", good_qty as "goodQty", bad_qty as "badQty" from reports where work_order_id=$1 and id<>$2',
+            [report.workOrderId, report.id]
+          )
+        ).rows;
+        applyReportProgress(order, existingReports, report);
+        await client.query(
+          "update work_orders set done_qty=$1, current_process=$2, status=$3, route=$4 where id=$5",
+          [order.doneQty, order.currentProcess, order.status, JSON.stringify(order.route), order.id]
+        );
         await client.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
           makeId("act"),
           `${order.id} 提交${report.processName}报工`,
           `${input.operator} · 刚刚`,
-          `良品 ${goodQty}，不良 ${badQty}${report.note ? `，${report.note}` : ""}`,
+          `完成 ${report.completedQty}，良品 ${report.goodQty}，不良 ${report.badQty}${report.badReason ? `，${report.badReason}` : ""}`,
           report.createdAt,
         ]);
-        if (badQty > 0 || report.note) {
+        if (report.badQty > 0 || report.note) {
           await client.query("insert into alerts(id,title,text,severity,status,created_at) values($1,$2,$3,$4,$5,$6)", [
             makeId("al"),
             `${order.id} 现场异常`,
-            `${report.processName} 备注：${report.note || `不良 ${badQty}`}`,
-            badQty > 0 ? "high" : "medium",
+            `${report.processName}：${report.badReason || report.note || `不良 ${report.badQty}`}`,
+            report.badQty > 0 ? "high" : "medium",
             "open",
             report.createdAt,
           ]);
@@ -626,8 +721,10 @@ async function ensureSchema(pool) {
       id text primary key,
       work_order_id text not null,
       process_name text not null,
+      completed_qty integer not null default 0,
       good_qty integer not null default 0,
       bad_qty integer not null default 0,
+      bad_reason text,
       note text,
       operator text,
       created_at timestamptz default now()
@@ -659,6 +756,8 @@ async function ensureSchema(pool) {
       created_at timestamptz default now()
     );
   `);
+  await pool.query("alter table reports add column if not exists completed_qty integer not null default 0");
+  await pool.query("alter table reports add column if not exists bad_reason text");
 }
 
 async function seedIfNeeded(pool) {
@@ -696,7 +795,9 @@ async function readPostgresState(pool) {
     pool.query("select id, name, customer, version, owner, due_date as \"dueDate\", status from samples order by id"),
     pool.query('select id, sample_id as "sampleId", product, planned_qty as "plannedQty", done_qty as "doneQty", current_process as "currentProcess", priority, status, due_at as "dueAt", route from work_orders order by id'),
     pool.query('select code, name, spec, stock_qty as "stockQty", safety_qty as "safetyQty", unit, location, batch_no as "batchNo", expiry_date as "expiryDate" from materials order by code'),
-    pool.query('select id, work_order_id as "workOrderId", process_name as "processName", good_qty as "goodQty", bad_qty as "badQty", note, operator, created_at as "createdAt" from reports order by created_at desc limit 50'),
+    pool.query(
+      'select id, work_order_id as "workOrderId", process_name as "processName", completed_qty as "completedQty", good_qty as "goodQty", bad_qty as "badQty", bad_reason as "badReason", note, operator, created_at as "createdAt" from reports order by created_at desc limit 200'
+    ),
     pool.query('select id, material_code as "materialCode", batch_no as "batchNo", type, qty, location, note, operator, created_at as "createdAt" from stock_movements order by created_at desc limit 50'),
     pool.query('select id, title, meta, note, created_at as "createdAt" from activities order by created_at desc limit 50'),
     pool.query('select id, title, text, severity, status, created_at as "createdAt" from alerts order by created_at desc limit 50'),

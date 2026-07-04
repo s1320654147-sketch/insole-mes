@@ -38,7 +38,19 @@ npm install
 npm run dev
 ```
 
+自动化自检：
+
+```bash
+cd alpha
+npm test
+```
+
 Alpha 地址：
 
 - 管理端：http://localhost:3000/admin.html
 - 工人端：http://localhost:3000/mobile.html
+
+当前 Alpha 已覆盖生产工单筛选、工艺路线进度、二维码/标签、手机扫码报工、
+完成/良品/不良记录、工序自动推进和交期风险视图。完整业务背景、历次沟通、
+测试账号、部署信息和接手规则统一维护在
+[`docs/PROJECT_HANDOFF_2026-07-02.md`](docs/PROJECT_HANDOFF_2026-07-02.md)。

@@ -301,7 +301,11 @@ h2 {
 }
 
 .task-title {
+  max-width: 260px;
+  overflow: hidden;
   font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .task-code,
@@ -439,6 +443,89 @@ body.sheet-open {
   border: 1px solid var(--border);
 }
 
+.report-order-summary {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.report-order-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.report-order-head > div {
+  min-width: 0;
+}
+
+.report-order-head strong,
+.report-order-head span {
+  display: block;
+}
+
+.report-order-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-order-head span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mobile-status {
+  min-height: 24px;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: var(--primary-deep) !important;
+}
+
+.report-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.report-summary-grid > div {
+  padding: 8px;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.report-summary-grid span,
+.report-summary-grid strong {
+  display: block;
+}
+
+.report-summary-grid span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.report-summary-grid strong {
+  margin-top: 2px;
+  font-size: 18px;
+}
+
+.process-description {
+  overflow: hidden;
+  color: #1e3a8a;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .scan-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -484,6 +571,20 @@ body.sheet-open {
 .mobile-form {
   display: grid;
   gap: 12px;
+}
+
+.required-field {
+  border-color: var(--danger) !important;
+  background: #fff7f7 !important;
+}
+
+.form-error {
+  padding: 9px 11px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: var(--danger);
+  font-size: 13px;
 }
 
 .number-grid {

@@ -1,6 +1,14 @@
 ﻿const tokenKey = "insole_mes_alpha_token_admin";
 const mobileTokenKey = "insole_mes_alpha_token_mobile";
 
+import {
+  getDueDateRisk,
+  getProcessProgressSummary,
+  getReportCompletedQty,
+  getWorkOrderQualitySummary as calculateWorkOrderQuality,
+  matchesWorkOrderFilter,
+} from "./production-metrics.js";
+
 const defaultRoute = [
   { name: "备料", status: "待开始" },
   { name: "裁切 / 开料", status: "待开始" },
@@ -13,6 +21,16 @@ const defaultRoute = [
 const sampleStatuses = ["待打样", "打样中", "待确认", "已确认", "暂停"];
 const orderStatuses = ["待领料", "待开始", "生产中", "已暂停", "已完成"];
 const priorities = ["高", "中", "低"];
+const orderFilterDefinitions = [
+  { key: "all", label: "全部" },
+  { key: "not-started", label: "未开始" },
+  { key: "in-progress", label: "进行中" },
+  { key: "completed", label: "已完成" },
+  { key: "urgent", label: "加急" },
+  { key: "overdue", label: "逾期" },
+  { key: "due-soon", label: "未来 3 天到期" },
+  { key: "risk", label: "异常 / 风险" },
+];
 
 const state = {
   currentView: "dashboard",
@@ -21,6 +39,7 @@ const state = {
   selectedMaterialKey: "",
   sampleEditorMode: "edit",
   orderEditorMode: "edit",
+  orderFilter: "all",
   currentUser: null,
   data: null,
 };
@@ -111,6 +130,103 @@ function formatShortDate(value) {
 function percent(doneQty, plannedQty) {
   if (!plannedQty) return 0;
   return Math.max(0, Math.min(100, Math.round((Number(doneQty) / Number(plannedQty)) * 100)));
+}
+
+function getWorkOrderReports(orderId) {
+  return (state.data?.reports || []).filter((report) => report.workOrderId === orderId);
+}
+
+function getWorkOrderQualitySummary(order) {
+  return calculateWorkOrderQuality(order, state.data?.reports || []);
+}
+
+function matchesOrderFilter(order, filterKey) {
+  return matchesWorkOrderFilter(order, filterKey, state.data?.reports || [], state.data?.alerts || []);
+}
+
+function renderDueDateBadge(order) {
+  const risk = getDueDateRisk(order);
+  return `<span class="due-badge ${risk.key}">${escapeHtml(risk.label)}</span>`;
+}
+
+function renderQualityBadge(order) {
+  const quality = getWorkOrderQualitySummary(order);
+  const badRate = quality.badRate === null ? "暂无" : `${quality.badRate.toFixed(1)}%`;
+  const className = quality.badQty > 0 ? "quality-badge risk" : "quality-badge";
+  return `<span class="${className}">良 ${quality.goodQty} · 不良 ${quality.badQty} · ${badRate}</span>`;
+}
+
+function renderProcessProgress(order, compact = false) {
+  const progress = getProcessProgressSummary(order);
+  if (!progress.total) return '<div class="process-empty">未配置工序</div>';
+  const reports = getWorkOrderReports(order.id);
+  return `
+    <div class="process-progress ${compact ? "compact" : ""}">
+      <div class="process-progress-head">
+        <span>${progress.completed}/${progress.total} 道已完成</span>
+        <span>${progress.percent}%</span>
+      </div>
+      <div class="process-track" role="list" aria-label="${escapeHtml(order.id)} 工序进度">
+        ${progress.route
+          .map((step, index) => {
+            const hasRisk = reports.some((report) => report.processName === step.name && Number(report.badQty || 0) > 0);
+            const statusClass =
+              step.status === "已完成"
+                ? "completed"
+                : step.status === "进行中" || step.name === order.currentProcess || index === progress.currentIndex
+                  ? "active"
+                  : "pending";
+            return `
+              <div class="process-node ${statusClass}" role="listitem" title="${escapeHtml(step.status || "待开始")}">
+                <span class="process-dot">${step.status === "已完成" ? "✓" : index + 1}</span>
+                <span class="process-name">${escapeHtml(step.name || "未命名工序")}</span>
+                ${hasRisk ? '<span class="risk-dot" aria-label="该工序有不良记录"></span>' : ""}
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function formatDateTime(value) {
+  if (!value) return "时间未知";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function renderWorkOrderReportHistory(order) {
+  const reports = getWorkOrderReports(order.id);
+  if (!reports.length) return '<div class="empty-state compact-empty">暂无报工记录，手机端提交后会出现在这里。</div>';
+  return `
+    <div class="report-history" role="table" aria-label="${escapeHtml(order.id)} 报工记录">
+      <div class="report-history-row head" role="row">
+        <span>工序 / 人员</span><span>完成</span><span>良品</span><span>不良</span><span>不良原因 / 备注</span><span>时间</span>
+      </div>
+      ${reports
+        .map(
+          (report) => `
+            <div class="report-history-row" role="row">
+              <span><strong>${escapeHtml(report.processName || "未填写工序")}</strong><small>${escapeHtml(report.operator || "未知人员")}</small></span>
+              <span>${getReportCompletedQty(report)}</span>
+              <span>${Number(report.goodQty || 0)}</span>
+              <span class="${Number(report.badQty || 0) > 0 ? "danger-text" : ""}">${Number(report.badQty || 0)}</span>
+              <span title="${escapeHtml([report.badReason, report.note].filter(Boolean).join("；") || "无")}">${escapeHtml([report.badReason, report.note].filter(Boolean).join("；") || "无")}</span>
+              <span>${escapeHtml(formatDateTime(report.createdAt))}</span>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
 }
 
 function routeToText(route = defaultRoute) {
@@ -247,7 +363,7 @@ function makeOrderDraft(order = {}) {
     currentProcess: order.currentProcess || route[0]?.name || "备料",
     priority: order.priority || "中",
     status: order.status || "待领料",
-    dueAt: order.dueAt || "",
+    dueAt: order.dueAt ? String(order.dueAt).slice(0, 10) : "",
     routeText: routeToText(route),
   };
 }
@@ -543,30 +659,77 @@ function renderSamples() {
   }
 }
 
-function renderOrders() {
-  document.getElementById("order-table").innerHTML = `
-    <div class="table">
-      <div class="table-head order-grid">
-        <div>工单号</div><div>产品</div><div>计划/完成</div><div>当前工序</div><div>优先级</div><div>状态</div>
-      </div>
-      ${state.data.workOrders
-        .map(
-          (order) => `
-            <div class="table-row order-grid clickable ${order.id === state.selectedOrderId && state.orderEditorMode === "edit" ? "active" : ""}" data-order-id="${escapeHtml(order.id)}">
-              <div>${escapeHtml(order.id)}</div>
-              <div>${escapeHtml(order.product)}</div>
-              <div>${order.plannedQty} / ${order.doneQty}</div>
-              <div>${escapeHtml(order.currentProcess)}</div>
-              <div>${escapeHtml(order.priority)}</div>
-              <div><span class="status ${normalizeStatus(order.status)}">${escapeHtml(order.status)}</span></div>
-            </div>
-          `
-        )
-        .join("")}
-    </div>
-  `;
+function renderWorkOrderStatusFilters() {
+  const root = document.getElementById("order-status-filters");
+  root.innerHTML = orderFilterDefinitions
+    .map((filter) => {
+      const count = state.data.workOrders.filter((order) => matchesOrderFilter(order, filter.key)).length;
+      return `
+        <button class="order-filter ${state.orderFilter === filter.key ? "active" : ""}" type="button" data-order-filter="${filter.key}">
+          <span>${filter.label}</span>
+          <strong>${count}</strong>
+        </button>
+      `;
+    })
+    .join("");
 
-  document.querySelectorAll("[data-order-id]").forEach((row) => {
+  root.querySelectorAll("[data-order-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.orderFilter = button.getAttribute("data-order-filter") || "all";
+      renderOrders();
+    });
+  });
+}
+
+function renderOrders() {
+  renderWorkOrderStatusFilters();
+  const filteredOrders = state.data.workOrders.filter((order) => matchesOrderFilter(order, state.orderFilter));
+  document.getElementById("order-table").innerHTML = filteredOrders.length
+    ? `
+      <div class="order-execution-list">
+        ${filteredOrders
+          .map((order) => {
+            const quality = getWorkOrderQualitySummary(order);
+            const progress = getProcessProgressSummary(order);
+            return `
+              <button class="order-execution-card ${order.id === state.selectedOrderId && state.orderEditorMode === "edit" ? "active" : ""}" type="button" data-order-id="${escapeHtml(order.id)}">
+                <div class="order-execution-head">
+                  <div class="order-identity">
+                    <strong>${escapeHtml(order.id || "未编号")}</strong>
+                    <span title="${escapeHtml(order.product || "未填写产品")}">${escapeHtml(order.product || "未填写产品")}</span>
+                  </div>
+                  <div class="order-badges">
+                    ${["高", "加急"].includes(order.priority) ? '<span class="priority-badge">加急</span>' : ""}
+                    <span class="status ${normalizeStatus(order.status)}">${escapeHtml(order.status || "未设置状态")}</span>
+                  </div>
+                </div>
+                <div class="order-metric-grid">
+                  <div><span>计划</span><strong>${Number(order.plannedQty || 0)}</strong></div>
+                  <div><span>已完成</span><strong>${Number(order.doneQty || 0)}</strong></div>
+                  <div><span>良品</span><strong>${quality.goodQty}</strong></div>
+                  <div><span>不良</span><strong class="${quality.badQty > 0 ? "danger-text" : ""}">${quality.badQty}</strong></div>
+                  <div><span>不良率</span><strong>${quality.badRate === null ? "暂无" : `${quality.badRate.toFixed(1)}%`}</strong></div>
+                </div>
+                <div class="order-context-row">
+                  <span>当前工序：<strong>${escapeHtml(order.currentProcess || "未配置工序")}</strong></span>
+                  ${renderDueDateBadge(order)}
+                  <span class="label-state">${order.id ? "二维码 / 标签已配置" : "未生成标签"}</span>
+                </div>
+                ${renderProcessProgress(order, true)}
+                <div class="order-execution-foot">
+                  <span>总体数量 ${Number(order.doneQty || 0)}/${Number(order.plannedQty || 0)}</span>
+                  <span>工序 ${progress.completed}/${progress.total || 0}</span>
+                  <span>累计报工 ${quality.completedQty}</span>
+                </div>
+              </button>
+            `;
+          })
+          .join("")}
+      </div>
+    `
+    : `<div class="empty-state">当前筛选下没有工单。</div>`;
+
+  document.getElementById("order-table").querySelectorAll("[data-order-id]").forEach((row) => {
     row.addEventListener("click", () => {
       state.selectedOrderId = row.getAttribute("data-order-id");
       state.orderEditorMode = "edit";
@@ -584,6 +747,8 @@ function renderOrderDetail() {
   const workOrderCode = buildWorkOrderCode(order);
   const workOrderLink = buildMobileWorkOrderLink(order);
   const workOrderLabelLink = buildWorkOrderLabelLink(order);
+  const quality = order ? getWorkOrderQualitySummary(order) : null;
+  const dueRisk = order ? getDueDateRisk(order) : null;
   const orderLocalOnlyNote = /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(window.location.origin)
     ? '<div class="item-note">当前是 localhost，本机点链接没问题；真机扫码要换成局域网地址或线上域名。</div>'
     : "";
@@ -594,24 +759,42 @@ function renderOrderDetail() {
         order
           ? `
             <div class="detail-card">
-              <div class="detail-block">
-                <div class="detail-title">基本信息</div>
-                <div>${escapeHtml(order.id)} · ${escapeHtml(order.product)}</div>
-                <div class="item-meta">样品单：${escapeHtml(order.sampleId || "未关联")} · 交期：${escapeHtml(order.dueAt)}</div>
-              </div>
-              <div class="detail-block">
-                <div class="detail-title">当前状态</div>
-                <div>${escapeHtml(order.status)} · 当前工序 ${escapeHtml(order.currentProcess)}</div>
+              <div class="detail-block execution-overview">
+                <div class="execution-overview-head">
+                  <div>
+                    <div class="detail-title">生产执行概览</div>
+                    <strong>${escapeHtml(order.id || "未编号")} · ${escapeHtml(order.product || "未填写产品")}</strong>
+                    <div class="item-meta">样品单：${escapeHtml(order.sampleId || "未关联")} · 当前工序：${escapeHtml(order.currentProcess || "未配置")}</div>
+                  </div>
+                  <div class="order-badges">
+                    ${["高", "加急"].includes(order.priority) ? '<span class="priority-badge">加急</span>' : ""}
+                    <span class="status ${normalizeStatus(order.status)}">${escapeHtml(order.status || "未设置状态")}</span>
+                    <span class="due-badge ${dueRisk.key}">${escapeHtml(dueRisk.label)}</span>
+                  </div>
+                </div>
+                <div class="execution-kpis">
+                  <div><span>计划数量</span><strong>${Number(order.plannedQty || 0)}</strong></div>
+                  <div><span>已完成</span><strong>${Number(order.doneQty || 0)}</strong></div>
+                  <div><span>累计报工</span><strong>${quality.completedQty}</strong></div>
+                  <div><span>良品</span><strong>${quality.goodQty}</strong></div>
+                  <div><span>不良</span><strong class="${quality.badQty > 0 ? "danger-text" : ""}">${quality.badQty}</strong></div>
+                  <div><span>不良率</span><strong>${quality.badRate === null ? "暂无" : `${quality.badRate.toFixed(1)}%`}</strong></div>
+                </div>
                 <div class="progress-row">
-                  <div class="progress-label"><span>完成进度</span><span>${order.doneQty}/${order.plannedQty}</span></div>
+                  <div class="progress-label"><span>总体数量</span><span>${Number(order.doneQty || 0)}/${Number(order.plannedQty || 0)}</span></div>
                   <div class="progress-bar"><div class="progress-fill" style="width:${percent(order.doneQty, order.plannedQty)}%"></div></div>
                 </div>
               </div>
               <div class="detail-block">
-                <div class="detail-title">工艺路线</div>
-                <div class="route-list">
-                  ${order.route.map((step) => `<div class="route-step"><span>${escapeHtml(step.name)}</span><span class="status ${normalizeStatus(step.status)}">${escapeHtml(step.status)}</span></div>`).join("")}
+                <div class="detail-title">工艺路线 / 工序进度</div>
+                ${renderProcessProgress(order)}
+              </div>
+              <div class="detail-block">
+                <div class="panel-head compact-head">
+                  <h2>报工记录</h2>
+                  ${renderQualityBadge(order)}
                 </div>
+                ${renderWorkOrderReportHistory(order)}
               </div>
               <div class="detail-block">
                 <div class="panel-head">
@@ -659,7 +842,7 @@ function renderOrderDetail() {
             </label>
             <label>
               交期
-              <input name="dueAt" type="date" value="${escapeHtml(draft.dueAt)}" required />
+              <input name="dueAt" type="date" value="${escapeHtml(draft.dueAt)}" />
             </label>
           </div>
           <div class="editor-grid three">
@@ -982,7 +1165,7 @@ function renderReporting() {
   document.getElementById("report-table").innerHTML = `
     <div class="table">
       <div class="table-head report-grid">
-        <div>工单</div><div>工序</div><div>良品</div><div>不良</div><div>备注</div><div>操作人</div>
+        <div>工单</div><div>工序</div><div>完成</div><div>良品</div><div>不良</div><div>不良原因 / 备注</div><div>操作人</div>
       </div>
       ${
         state.data.reports
@@ -991,9 +1174,10 @@ function renderReporting() {
               <div class="table-row report-grid">
                 <div>${escapeHtml(item.workOrderId)}</div>
                 <div>${escapeHtml(item.processName)}</div>
-                <div>${item.goodQty}</div>
-                <div>${item.badQty}</div>
-                <div>${escapeHtml(item.note || "-")}</div>
+                <div>${getReportCompletedQty(item)}</div>
+                <div>${Number(item.goodQty || 0)}</div>
+                <div class="${Number(item.badQty || 0) > 0 ? "danger-text" : ""}">${Number(item.badQty || 0)}</div>
+                <div>${escapeHtml([item.badReason, item.note].filter(Boolean).join("；") || "-")}</div>
                 <div>${escapeHtml(item.operator || "-")}</div>
               </div>
             `

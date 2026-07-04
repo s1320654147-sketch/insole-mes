@@ -47,8 +47,10 @@ create table if not exists reports (
   id text primary key,
   work_order_id text not null,
   process_name text not null,
+  completed_qty integer not null default 0,
   good_qty integer not null default 0,
   bad_qty integer not null default 0,
+  bad_reason text,
   note text,
   operator text,
   created_at timestamptz default now()
