@@ -43,6 +43,35 @@ create table if not exists materials (
   primary key(code, batch_no)
 );
 
+create table if not exists material_items (
+  code text primary key,
+  name text not null,
+  spec text,
+  unit text not null,
+  safety_qty numeric not null default 0,
+  default_location text,
+  supplier text,
+  status text not null default '启用',
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create table if not exists material_batches (
+  id text primary key,
+  material_code text not null references material_items(code),
+  batch_no text not null,
+  initial_qty numeric not null default 0,
+  stock_qty numeric not null default 0,
+  location text not null,
+  received_date date not null,
+  expiry_date date not null,
+  supplier text,
+  note text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  unique(material_code, batch_no)
+);
+
 create table if not exists reports (
   id text primary key,
   work_order_id text not null,
@@ -65,6 +94,10 @@ create table if not exists stock_movements (
   location text,
   note text,
   operator text,
+  source text,
+  before_qty numeric,
+  after_qty numeric,
+  material_batch_id text,
   created_at timestamptz default now()
 );
 

@@ -36,6 +36,7 @@ const state = {
   currentView: "dashboard",
   selectedSampleId: "",
   selectedOrderId: "",
+  selectedMaterialCode: "",
   selectedMaterialKey: "",
   sampleEditorMode: "edit",
   orderEditorMode: "edit",
@@ -273,16 +274,96 @@ function getSelectedOrder() {
 }
 
 function materialKey(material) {
-  return material ? `${material.code}|${material.batchNo}` : "";
+  return material ? `${material.materialCode || material.code}|${material.batchNo}` : "";
+}
+
+function getMaterialItems() {
+  if (state.data?.materialItems?.length) return state.data.materialItems;
+  const seen = new Map();
+  (state.data?.materials || []).forEach((item) => {
+    if (!seen.has(item.code)) {
+      seen.set(item.code, {
+        code: item.code,
+        name: item.name,
+        spec: item.spec,
+        unit: item.unit,
+        safetyQty: item.safetyQty,
+        defaultLocation: item.location,
+        supplier: item.supplier || "",
+        status: "启用",
+      });
+    }
+  });
+  return Array.from(seen.values());
+}
+
+function getMaterialBatches() {
+  if (state.data?.materialBatches?.length) return state.data.materialBatches;
+  return (state.data?.materials || []).map((item) => ({
+    id: item.materialBatchId || materialKey(item),
+    materialCode: item.code,
+    batchNo: item.batchNo,
+    initialQty: item.initialQty ?? item.stockQty,
+    stockQty: item.stockQty,
+    location: item.location,
+    receivedDate: item.receivedDate || "",
+    expiryDate: item.expiryDate || "",
+    supplier: item.supplier || "",
+    note: item.note || "",
+    batchStatus: item.batchStatus || getBatchStatus(item),
+  }));
+}
+
+function getBatchStatus(batch) {
+  if (Number(batch?.stockQty || 0) <= 0) return "已用完";
+  const expiryDate = String(batch?.expiryDate || "").slice(0, 10);
+  if (!expiryDate) return "正常";
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const soon = new Date(today);
+  soon.setHours(0, 0, 0, 0);
+  soon.setDate(soon.getDate() + 30);
+  const soonKey = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
+  if (expiryDate < todayKey) return "已过期";
+  if (expiryDate <= soonKey) return "即将过期";
+  return "正常";
+}
+
+function getMaterialSummary(materialCode) {
+  const fromState = (state.data?.materialSummaries || []).find((item) => item.materialCode === materialCode);
+  if (fromState) return fromState;
+  const material = getMaterialItems().find((item) => item.code === materialCode) || {};
+  const batches = getMaterialBatches().filter((item) => item.materialCode === materialCode);
+  const totalStockQty = batches.reduce((sum, batch) => sum + Number(batch.stockQty || 0), 0);
+  const nearestExpiryDate = batches
+    .filter((batch) => Number(batch.stockQty || 0) > 0 && batch.expiryDate)
+    .map((batch) => String(batch.expiryDate).slice(0, 10))
+    .sort()[0] || "";
+  return {
+    materialCode,
+    name: material.name || "",
+    spec: material.spec || "",
+    unit: material.unit || "",
+    safetyQty: Number(material.safetyQty || 0),
+    totalStockQty,
+    batchCount: batches.length,
+    nearestExpiryDate,
+    lowStock: totalStockQty < Number(material.safetyQty || 0),
+    status: material.status || "启用",
+  };
+}
+
+function getSelectedMaterialItem() {
+  return getMaterialItems().find((item) => item.code === state.selectedMaterialCode) || getMaterialItems()[0] || null;
 }
 
 function getSelectedMaterial() {
-  return state.data?.materials.find((item) => materialKey(item) === state.selectedMaterialKey) || null;
+  return getMaterialBatches().find((item) => materialKey(item) === state.selectedMaterialKey) || null;
 }
 
-function buildMaterialBatchCode(material) {
-  if (!material) return "";
-  return ["MAT", material.code, material.batchNo, material.location || ""].join("|");
+function buildMaterialBatchCode(batch) {
+  if (!batch) return "";
+  return ["MAT", batch.materialCode || batch.code, batch.batchNo, batch.location || ""].join("|");
 }
 
 function buildMobileBatchLink(material) {
@@ -387,9 +468,16 @@ function syncSelections() {
     if (!state.selectedOrderId && !state.data.workOrders.length) state.orderEditorMode = "create";
   }
 
-  const materialExists = state.data.materials.some((item) => materialKey(item) === state.selectedMaterialKey);
+  const materialItems = getMaterialItems();
+  const materialCodeExists = materialItems.some((item) => item.code === state.selectedMaterialCode);
+  if (!materialCodeExists) {
+    state.selectedMaterialCode = materialItems[0]?.code || "";
+  }
+
+  const selectedBatches = getMaterialBatches().filter((item) => item.materialCode === state.selectedMaterialCode);
+  const materialExists = selectedBatches.some((item) => materialKey(item) === state.selectedMaterialKey);
   if (!materialExists) {
-    state.selectedMaterialKey = materialKey(state.data.materials[0]);
+    state.selectedMaterialKey = materialKey(selectedBatches[0]);
   }
 }
 
@@ -441,12 +529,13 @@ function renderDashboard() {
     `;
   });
 
-  const materialRisks = state.data.materials
-    .filter((item) => Number(item.stockQty) < Number(item.safetyQty))
+  const materialRisks = getMaterialItems()
+    .map((item) => ({ item, summary: getMaterialSummary(item.code) }))
+    .filter(({ summary }) => summary.lowStock)
     .map((item) => ({
-      title: item.name,
-      meta: `${item.code} · 库位 ${item.location} · 批次 ${item.batchNo}`,
-      note: `当前 ${item.stockQty} ${item.unit} / 安全库存 ${item.safetyQty} ${item.unit}`,
+      title: item.item.name,
+      meta: `${item.item.code} · 批次 ${item.summary.batchCount} 个 · 最近到期 ${item.summary.nearestExpiryDate || "-"}`,
+      note: `当前 ${item.summary.totalStockQty} ${item.item.unit} / 安全库存 ${item.summary.safetyQty} ${item.item.unit}`,
       label: "低库存",
     }));
   const alertRisks = state.data.alerts
@@ -966,44 +1055,85 @@ function renderOrderDetail() {
 }
 
 function renderMaterials() {
-  const selectedMaterial = getSelectedMaterial() || state.data.materials[0] || null;
-  const batchCode = buildMaterialBatchCode(selectedMaterial);
-  const batchLink = buildMobileBatchLink(selectedMaterial);
-  const batchLabelLink = buildBatchLabelLink(selectedMaterial);
+  const materialItems = getMaterialItems();
+  const selectedMaterialItem = getSelectedMaterialItem();
+  const materialBatches = getMaterialBatches();
+  const selectedBatches = selectedMaterialItem ? materialBatches.filter((item) => item.materialCode === selectedMaterialItem.code) : [];
+  const selectedBatch = getSelectedMaterial() || selectedBatches[0] || null;
+  const selectedSummary = selectedMaterialItem ? getMaterialSummary(selectedMaterialItem.code) : null;
+  const batchCode = buildMaterialBatchCode(selectedBatch);
+  const batchLink = buildMobileBatchLink(selectedBatch);
+  const batchLabelLink = buildBatchLabelLink(selectedBatch);
+  const today = new Date();
+  const todayValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const expiry = new Date(today);
+  expiry.setDate(expiry.getDate() + 30);
+  const defaultExpiryValue = `${expiry.getFullYear()}-${String(expiry.getMonth() + 1).padStart(2, "0")}-${String(expiry.getDate()).padStart(2, "0")}`;
   const localOnlyNote = /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(window.location.origin)
     ? '<div class="item-note">当前是 localhost，本机点链接没问题，但真机扫码还需要部署上线，或者改成你电脑的局域网 IP 地址。</div>'
     : '';
   const movementRows = (state.data.stockMovements || [])
-    .filter((item) => !selectedMaterial || (item.materialCode === selectedMaterial.code && item.batchNo === selectedMaterial.batchNo))
+    .filter((item) => !selectedBatch || (item.materialCode === selectedBatch.materialCode && item.batchNo === selectedBatch.batchNo))
     .slice(0, 8);
 
   document.getElementById("material-table").innerHTML = `
     <div class="panel-grid two-up material-layout">
       <section class="detail-stack">
+        <div class="detail-block">
+          <div class="panel-head">
+            <h2>物料档案</h2>
+            <span class="badge">${materialItems.length} 个物料</span>
+          </div>
+          <div class="table">
+            <div class="table-head material-master-grid">
+              <div>料号</div><div>物料</div><div>规格</div><div>总库存</div><div>安全库存</div><div>最近到期</div><div>状态</div>
+            </div>
+            ${
+              materialItems
+                .map((item) => {
+                  const summary = getMaterialSummary(item.code);
+                  return `
+                    <button class="table-row material-master-grid clickable ${item.code === selectedMaterialItem?.code ? "active" : ""}" data-material-code="${escapeHtml(item.code)}" type="button">
+                      <div>${escapeHtml(item.code)}</div>
+                      <div>${escapeHtml(item.name)}</div>
+                      <div>${escapeHtml(item.spec || "-")}</div>
+                      <div><span class="status ${summary.lowStock ? "warn" : ""}">${summary.totalStockQty} ${escapeHtml(item.unit)}</span></div>
+                      <div>${summary.safetyQty} ${escapeHtml(item.unit)}</div>
+                      <div>${escapeHtml(summary.nearestExpiryDate || "-")}</div>
+                      <div><span class="status ${summary.lowStock ? "warn" : "running"}">${summary.lowStock ? "低库存" : escapeHtml(item.status || "启用")}</span></div>
+                    </button>
+                  `;
+                })
+                .join("") || '<div class="empty-state">暂无物料档案。</div>'
+            }
+          </div>
+        </div>
+
         <div class="table">
           <div class="table-head material-grid">
-            <div>料号</div><div>物料</div><div>规格</div><div>库存</div><div>安全库存</div><div>批次 / 库位</div>
+            <div>批次号</div><div>库存</div><div>初始</div><div>库位</div><div>来料</div><div>到期 / 状态</div>
           </div>
-          ${state.data.materials
-            .map(
-              (item) => `
-                <button class="table-row material-grid clickable ${materialKey(item) === materialKey(selectedMaterial) ? "active" : ""}" data-material-key="${escapeHtml(materialKey(item))}" type="button">
-                  <div>${escapeHtml(item.code)}</div>
-                  <div>${escapeHtml(item.name)}</div>
-                  <div>${escapeHtml(item.spec)}</div>
-                  <div><span class="status ${item.stockQty < item.safetyQty ? "warn" : ""}">${item.stockQty} ${escapeHtml(item.unit)}</span></div>
-                  <div>${item.safetyQty} ${escapeHtml(item.unit)}</div>
-                  <div>${escapeHtml(item.batchNo)} / ${escapeHtml(item.location)}</div>
+          ${selectedBatches
+            .map((item) => {
+              const status = item.batchStatus || getBatchStatus(item);
+              return `
+                <button class="table-row material-grid clickable ${materialKey(item) === materialKey(selectedBatch) ? "active" : ""}" data-material-key="${escapeHtml(materialKey(item))}" type="button">
+                  <div>${escapeHtml(item.batchNo)}</div>
+                  <div><span class="status ${status === "已过期" || status === "已用完" ? "warn" : ""}">${Number(item.stockQty || 0)} ${escapeHtml(selectedMaterialItem?.unit || "")}</span></div>
+                  <div>${Number(item.initialQty || 0)} ${escapeHtml(selectedMaterialItem?.unit || "")}</div>
+                  <div>${escapeHtml(item.location || "-")}</div>
+                  <div>${escapeHtml(String(item.receivedDate || "").slice(0, 10) || "-")}</div>
+                  <div>${escapeHtml(String(item.expiryDate || "").slice(0, 10) || "-")} / <span class="status ${status === "正常" ? "running" : status === "即将过期" ? "pending" : "warn"}">${escapeHtml(status)}</span></div>
                 </button>
-              `
-            )
-            .join("")}
+              `;
+            })
+            .join("") || '<div class="empty-state">当前物料还没有批次。</div>'}
         </div>
 
         <div class="detail-block">
           <div class="panel-head">
             <h2>最近出入库</h2>
-            <span class="badge">${selectedMaterial ? escapeHtml(selectedMaterial.batchNo) : "批次记录"}</span>
+            <span class="badge">${selectedBatch ? escapeHtml(selectedBatch.batchNo) : "批次记录"}</span>
           </div>
           <div class="list">
             ${
@@ -1013,7 +1143,7 @@ function renderMaterials() {
                       (item) => `
                         <div class="list-item">
                           <div class="item-top">
-                            <div class="item-title">${item.type === "out" ? "出库" : "入库"} ${escapeHtml(item.qty)}${selectedMaterial ? escapeHtml(selectedMaterial.unit) : ""}</div>
+                            <div class="item-title">${item.type === "out" ? "出库" : item.type === "adjust" ? "调整" : "入库"} ${escapeHtml(item.qty)}${selectedMaterialItem ? escapeHtml(selectedMaterialItem.unit) : ""}</div>
                             <span class="status ${item.type === "out" ? "warn" : "pending"}">${item.type === "out" ? "出库" : "入库"}</span>
                           </div>
                           <div class="item-meta">${escapeHtml(item.batchNo)} / ${escapeHtml(item.location || "-")} / ${escapeHtml(item.operator || "-")}</div>
@@ -1031,47 +1161,91 @@ function renderMaterials() {
       <section class="detail-stack">
         <div class="detail-block">
           <div class="panel-head">
-            <h2>批次操作</h2>
-            <span class="badge ${selectedMaterial && Number(selectedMaterial.stockQty) < Number(selectedMaterial.safetyQty) ? "warn" : ""}">
-              ${selectedMaterial ? `${selectedMaterial.stockQty} ${escapeHtml(selectedMaterial.unit)}` : "未选择批次"}
+            <h2>新建物料</h2>
+            <span class="badge">档案</span>
+          </div>
+          <form class="editor-form" id="material-item-form">
+            <div class="editor-grid two">
+              <label>物料编号<input name="code" placeholder="例如：RM-PU-001" required /></label>
+              <label>物料名称<input name="name" placeholder="例如：PU 原材料" required /></label>
+              <label>规格<input name="spec" placeholder="例如：低温热塑" /></label>
+              <label>单位<input name="unit" placeholder="例如：kg" required /></label>
+              <label>安全库存<input name="safetyQty" type="number" min="0" step="1" value="0" required /></label>
+              <label>默认库位<input name="defaultLocation" placeholder="例如：A-01" /></label>
+            </div>
+            <div class="editor-actions">
+              <button class="primary-btn" type="submit">保存物料档案</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="detail-block">
+          <div class="panel-head">
+            <h2>新建批次 / 入库</h2>
+            <span class="badge ${selectedSummary?.lowStock ? "warn" : ""}">
+              ${selectedSummary ? `${selectedSummary.totalStockQty} ${escapeHtml(selectedMaterialItem?.unit || "")}` : "未选择物料"}
             </span>
           </div>
           ${
-            selectedMaterial
+            selectedMaterialItem
               ? `
                 <div class="detail-card">
-                  <div class="detail-block">
-                    <div class="detail-title">当前批次</div>
-                    <div class="item-title">${escapeHtml(selectedMaterial.name)} / ${escapeHtml(selectedMaterial.batchNo)}</div>
-                    <div class="item-meta">${escapeHtml(selectedMaterial.code)} / ${escapeHtml(selectedMaterial.location)} / 到期 ${escapeHtml(selectedMaterial.expiryDate || "-")}</div>
-                  </div>
-
-                  <form class="editor-form" id="material-movement-form">
+                  <form class="editor-form" id="material-batch-form">
                     <div class="editor-grid two">
                       <label>
-                        出入库类型
-                        <select name="type">
-                          <option value="in">入库</option>
-                          <option value="out">出库</option>
+                        物料
+                        <select name="materialCode">
+                          ${materialItems.map((item) => `<option value="${escapeHtml(item.code)}" ${item.code === selectedMaterialItem.code ? "selected" : ""}>${escapeHtml(item.code)} / ${escapeHtml(item.name)}</option>`).join("")}
                         </select>
                       </label>
-                      <label>
-                        数量
-                        <input name="qty" type="number" min="0" step="1" value="0" required />
-                      </label>
-                      <label>
-                        库位
-                        <input name="location" value="${escapeHtml(selectedMaterial.location || "")}" />
-                      </label>
-                      <label>
-                        备注
-                        <input name="note" placeholder="采购到货、领料、退料、盘点调整" />
-                      </label>
+                      <label>批次号<input name="batchNo" placeholder="例如：PU-202607-001" required /></label>
+                      <label>入库数量<input name="initialQty" type="number" min="1" step="1" value="1" required /></label>
+                      <label>库位<input name="location" value="${escapeHtml(selectedMaterialItem.defaultLocation || "")}" required /></label>
+                      <label>来料日期<input name="receivedDate" type="date" value="${todayValue}" required /></label>
+                      <label>保质期截止日期<input name="expiryDate" type="date" value="${defaultExpiryValue}" required /></label>
+                      <label>供应商<input name="supplier" value="${escapeHtml(selectedMaterialItem.supplier || "")}" placeholder="可选" /></label>
+                      <label>备注<input name="note" placeholder="可选，例如采购到货" /></label>
                     </div>
                     <div class="editor-actions">
-                      <button class="primary-btn" type="submit">提交库存动作</button>
+                      <button class="primary-btn" type="submit">创建批次并入库</button>
                     </div>
                   </form>
+
+                  <div class="detail-block">
+                    <div class="detail-title">当前批次</div>
+                    ${
+                      selectedBatch
+                        ? `
+                          <div class="item-title">${escapeHtml(selectedMaterialItem.name)} / ${escapeHtml(selectedBatch.batchNo)}</div>
+                          <div class="item-meta">${escapeHtml(selectedBatch.materialCode)} / ${escapeHtml(selectedBatch.location)} / 到期 ${escapeHtml(String(selectedBatch.expiryDate || "").slice(0, 10) || "-")} / ${escapeHtml(selectedBatch.supplier || selectedMaterialItem.supplier || "-")}</div>
+                        `
+                        : '<div class="empty-state compact-empty">当前物料暂无批次，先新建一个批次。</div>'
+                    }
+                  </div>
+
+                  ${
+                    selectedBatch
+                      ? `
+                        <form class="editor-form" id="material-movement-form">
+                          <div class="editor-grid two">
+                            <label>
+                              出入库类型
+                              <select name="type">
+                                <option value="in">入库</option>
+                                <option value="out">出库</option>
+                              </select>
+                            </label>
+                            <label>数量<input name="qty" type="number" min="1" step="1" value="1" required /></label>
+                            <label>库位<input name="location" value="${escapeHtml(selectedBatch.location || "")}" required /></label>
+                            <label>备注<input name="note" placeholder="采购到货、领料、退料、盘点调整" /></label>
+                          </div>
+                          <div class="editor-actions">
+                            <button class="primary-btn" type="submit">提交库存动作</button>
+                          </div>
+                        </form>
+                      `
+                      : ""
+                  }
 
                   <div class="detail-block">
                     <div class="panel-head">
@@ -1083,20 +1257,29 @@ function renderMaterials() {
                       </div>
                     </div>
                     <div class="detail-title">批次码</div>
-                    <div class="code-block">${escapeHtml(batchCode)}</div>
+                    <div class="code-block">${escapeHtml(batchCode || "暂无批次")}</div>
                     <div class="detail-title">H5 扫码链接</div>
-                    <div class="code-block">${escapeHtml(batchLink)}</div>
-                    <div class="item-note">这版 Alpha 先把批次码固定成 <code>MAT|料号|批次|库位</code>。仓库端既可以在系统里点“启动摄像头”扫标签，也可以直接用微信、钉钉或浏览器扫一个 H5 二维码跳到移动端。</div>
+                    <div class="code-block">${escapeHtml(batchLink || "暂无批次")}</div>
+                    <div class="item-note">批次码继续沿用 <code>MAT|料号|批次|库位</code>。新旧标签都能被手机端识别。</div>
                     ${localOnlyNote}
                   </div>
                 </div>
               `
-              : '<div class="empty-state">暂无物料批次。</div>'
+              : '<div class="empty-state">暂无物料档案，请先新建物料。</div>'
           }
         </div>
       </section>
     </div>
   `;
+
+  document.querySelectorAll("[data-material-code]").forEach((row) => {
+    row.addEventListener("click", () => {
+      state.selectedMaterialCode = row.getAttribute("data-material-code");
+      const firstBatch = getMaterialBatches().find((item) => item.materialCode === state.selectedMaterialCode);
+      state.selectedMaterialKey = materialKey(firstBatch);
+      renderMaterials();
+    });
+  });
 
   document.querySelectorAll("[data-material-key]").forEach((row) => {
     row.addEventListener("click", () => {
@@ -1106,7 +1289,7 @@ function renderMaterials() {
   });
 
   const copyButton = document.getElementById("copy-batch-code-btn");
-  if (copyButton && selectedMaterial) {
+  if (copyButton && selectedBatch) {
     copyButton.addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(batchCode);
@@ -1118,7 +1301,7 @@ function renderMaterials() {
   }
 
   const copyLinkButton = document.getElementById("copy-batch-link-btn");
-  if (copyLinkButton && selectedMaterial) {
+  if (copyLinkButton && selectedBatch) {
     copyLinkButton.addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(batchLink);
@@ -1129,8 +1312,68 @@ function renderMaterials() {
     });
   }
 
+  const materialItemForm = document.getElementById("material-item-form");
+  if (materialItemForm) {
+    materialItemForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(materialItemForm);
+      try {
+        const result = await api("/api/material-items", {
+          method: "POST",
+          body: JSON.stringify({
+            code: formData.get("code"),
+            name: formData.get("name"),
+            spec: formData.get("spec"),
+            unit: formData.get("unit"),
+            safetyQty: Number(formData.get("safetyQty") || 0),
+            defaultLocation: formData.get("defaultLocation"),
+          }),
+        });
+        state.data = result.state;
+        state.selectedMaterialCode = result.material.code;
+        state.selectedMaterialKey = "";
+        syncSelections();
+        renderAll();
+        showToast("物料档案已创建");
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+  }
+
+  const materialBatchForm = document.getElementById("material-batch-form");
+  if (materialBatchForm) {
+    materialBatchForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(materialBatchForm);
+      try {
+        const result = await api("/api/material-batches", {
+          method: "POST",
+          body: JSON.stringify({
+            materialCode: formData.get("materialCode"),
+            batchNo: formData.get("batchNo"),
+            initialQty: Number(formData.get("initialQty") || 0),
+            location: formData.get("location"),
+            receivedDate: formData.get("receivedDate"),
+            expiryDate: formData.get("expiryDate"),
+            supplier: formData.get("supplier"),
+            note: formData.get("note"),
+          }),
+        });
+        state.data = result.state;
+        state.selectedMaterialCode = result.batch.materialCode;
+        state.selectedMaterialKey = materialKey(result.batch);
+        syncSelections();
+        renderAll();
+        showToast("批次已创建并入库");
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+  }
+
   const movementForm = document.getElementById("material-movement-form");
-  if (movementForm && selectedMaterial) {
+  if (movementForm && selectedBatch) {
     movementForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formData = new FormData(movementForm);
@@ -1138,16 +1381,18 @@ function renderMaterials() {
         const result = await api("/api/stock-movements", {
           method: "POST",
           body: JSON.stringify({
-            materialCode: selectedMaterial.code,
-            batchNo: selectedMaterial.batchNo,
+            materialCode: selectedBatch.materialCode,
+            batchNo: selectedBatch.batchNo,
             type: formData.get("type"),
             qty: Number(formData.get("qty") || 0),
             location: formData.get("location"),
             note: formData.get("note"),
+            source: "admin",
           }),
         });
         state.data = result.state;
-        state.selectedMaterialKey = materialKey({ code: selectedMaterial.code, batchNo: selectedMaterial.batchNo });
+        state.selectedMaterialCode = selectedBatch.materialCode;
+        state.selectedMaterialKey = materialKey(selectedBatch);
         syncSelections();
         renderAll();
         showToast(formData.get("type") === "out" ? "出库已记录" : "入库已记录");

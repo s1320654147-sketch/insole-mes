@@ -137,6 +137,42 @@ async function handleApi(request, response, url) {
     return true;
   }
 
+  if (url.pathname === "/api/material-items" && request.method === "GET") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    const state = await store.getState(user.role);
+    sendJson(response, 200, { materialItems: state.materialItems || [], materialSummaries: state.materialSummaries || [] });
+    return true;
+  }
+
+  if (url.pathname === "/api/material-items" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const body = await readJson(request);
+    const result = await store.createMaterialItem({ ...body, operator: user.name });
+    sendJson(response, 201, await withScopedState(result, user.role));
+    return true;
+  }
+
+  if (url.pathname === "/api/material-batches" && request.method === "GET") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    const state = await store.getState(user.role);
+    sendJson(response, 200, { materialBatches: state.materialBatches || [], materials: state.materials || [] });
+    return true;
+  }
+
+  if (url.pathname === "/api/material-batches" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const body = await readJson(request);
+    const result = await store.createMaterialBatch({ ...body, operator: user.name });
+    sendJson(response, 201, await withScopedState(result, user.role));
+    return true;
+  }
+
   if (url.pathname === "/api/reports" && request.method === "POST") {
     const user = requireUser(request, response);
     if (!user) return true;

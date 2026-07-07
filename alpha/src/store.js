@@ -187,12 +187,243 @@ function assertStockMovementInput(movement, availableQty = Number.POSITIVE_INFIN
   }
 }
 
+function dateOnly(value) {
+  if (!value) return "";
+  if (typeof value === "string") {
+    const matched = value.match(/^\d{4}-\d{2}-\d{2}/);
+    return matched ? matched[0] : "";
+  }
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return "";
+}
+
+function addDays(dateValue, days) {
+  const date = dateValue instanceof Date ? new Date(dateValue) : new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return dateOnly(date);
+}
+
+export function getBatchExpiryStatus(batch, now = new Date()) {
+  if (Number(batch?.stockQty || 0) <= 0) return "已用完";
+  const expiryDate = dateOnly(batch?.expiryDate);
+  if (!expiryDate) return "正常";
+  const today = dateOnly(now);
+  if (expiryDate < today) return "已过期";
+  if (expiryDate <= addDays(now, 30)) return "即将过期";
+  return "正常";
+}
+
+function normalizeMaterialItemInput(input = {}, fallback = {}) {
+  return {
+    code: String(input.code || fallback.code || "").trim(),
+    name: String(input.name || fallback.name || "").trim(),
+    spec: String(input.spec ?? fallback.spec ?? "").trim(),
+    unit: String(input.unit || fallback.unit || "").trim(),
+    safetyQty: Number(input.safetyQty ?? fallback.safetyQty ?? 0),
+    defaultLocation: String(input.defaultLocation || fallback.defaultLocation || fallback.location || "").trim(),
+    supplier: String(input.supplier || fallback.supplier || "").trim(),
+    status: String(input.status || fallback.status || "启用").trim() || "启用",
+  };
+}
+
+function assertMaterialItemInput(material, existingItems = [], originalCode = "") {
+  if (!material.code) throw new Error("物料编号不能为空");
+  if (!material.name) throw new Error("物料名称不能为空");
+  if (!material.unit) throw new Error("单位不能为空");
+  if (!Number.isFinite(material.safetyQty) || material.safetyQty < 0) throw new Error("安全库存必须是非负数");
+  const duplicated = existingItems.some((item) => item.code === material.code && item.code !== originalCode);
+  if (duplicated) throw new Error("物料编号不能重复");
+}
+
+function normalizeMaterialBatchInput(input = {}, material = {}) {
+  const today = dateOnly(new Date());
+  return {
+    materialCode: String(input.materialCode || material.code || "").trim(),
+    batchNo: String(input.batchNo || "").trim(),
+    initialQty: Number(input.initialQty ?? input.qty ?? 0),
+    stockQty: Number(input.stockQty ?? input.initialQty ?? input.qty ?? 0),
+    location: String(input.location || material.defaultLocation || "").trim(),
+    receivedDate: dateOnly(input.receivedDate) || today,
+    expiryDate: dateOnly(input.expiryDate),
+    supplier: String(input.supplier || material.supplier || "").trim(),
+    note: String(input.note || "").trim(),
+  };
+}
+
+function assertMaterialBatchInput(batch, materialItems = [], existingBatches = []) {
+  if (!batch.materialCode) throw new Error("物料必选");
+  if (!materialItems.some((item) => item.code === batch.materialCode)) throw new Error("物料档案不存在");
+  if (!batch.batchNo) throw new Error("批次号不能为空");
+  if (!Number.isFinite(batch.initialQty) || batch.initialQty <= 0) throw new Error("入库数量必须大于 0");
+  if (!Number.isInteger(batch.initialQty)) throw new Error("入库数量不能是小数");
+  if (!batch.location) throw new Error("库位不能为空");
+  if (!batch.receivedDate) throw new Error("来料日期不能为空");
+  if (!batch.expiryDate) throw new Error("保质期截止日期不能为空");
+  if (batch.expiryDate < batch.receivedDate) throw new Error("保质期截止日期不能早于来料日期");
+  if (existingBatches.some((item) => item.materialCode === batch.materialCode && item.batchNo === batch.batchNo)) {
+    throw new Error("同一物料下批次号不能重复");
+  }
+}
+
+function normalizeMaterialItemRecord(input = {}) {
+  const now = new Date().toISOString();
+  const material = normalizeMaterialItemInput(input);
+  return {
+    ...material,
+    createdAt: input.createdAt || now,
+    updatedAt: input.updatedAt || now,
+  };
+}
+
+function normalizeMaterialBatchRecord(input = {}, material = {}) {
+  const now = new Date().toISOString();
+  const batch = normalizeMaterialBatchInput(input, material);
+  return {
+    id: input.id || makeId("mb"),
+    ...batch,
+    initialQty: Number(input.initialQty ?? batch.initialQty ?? input.stockQty ?? 0),
+    stockQty: Number(input.stockQty ?? batch.stockQty ?? input.initialQty ?? 0),
+    createdAt: input.createdAt || now,
+    updatedAt: input.updatedAt || now,
+  };
+}
+
+export function normalizeLegacyMaterials(data = {}) {
+  const legacyMaterials = Array.isArray(data.materials) ? data.materials : [];
+  const materialItems = Array.isArray(data.materialItems) && data.materialItems.length
+    ? data.materialItems.map(normalizeMaterialItemRecord)
+    : [];
+  const materialBatches = Array.isArray(data.materialBatches) && data.materialBatches.length
+    ? data.materialBatches.map((item) => normalizeMaterialBatchRecord(item))
+    : [];
+
+  for (const legacy of legacyMaterials) {
+    if (!legacy?.code) continue;
+    if (!materialItems.some((item) => item.code === legacy.code)) {
+      materialItems.push(
+        normalizeMaterialItemRecord({
+          code: legacy.code,
+          name: legacy.name,
+          spec: legacy.spec,
+          unit: legacy.unit,
+          safetyQty: legacy.safetyQty,
+          defaultLocation: legacy.location,
+          supplier: legacy.supplier,
+          status: "启用",
+        })
+      );
+    }
+    if (legacy.batchNo && !materialBatches.some((item) => item.materialCode === legacy.code && item.batchNo === legacy.batchNo)) {
+      materialBatches.push(
+        normalizeMaterialBatchRecord({
+          id: legacy.id || `legacy-${legacy.code}-${legacy.batchNo}`.replace(/[^a-zA-Z0-9_-]/g, "-"),
+          materialCode: legacy.code,
+          batchNo: legacy.batchNo,
+          initialQty: Number(legacy.initialQty ?? legacy.stockQty ?? 0),
+          stockQty: Number(legacy.stockQty ?? 0),
+          location: legacy.location,
+          receivedDate: legacy.receivedDate || legacy.createdAt || dateOnly(new Date()),
+          expiryDate: legacy.expiryDate,
+          supplier: legacy.supplier,
+          note: legacy.note || "历史库存迁移",
+          createdAt: legacy.createdAt,
+          updatedAt: legacy.updatedAt,
+        })
+      );
+    }
+  }
+
+  return { materialItems, materialBatches };
+}
+
+function buildCompatMaterials(materialItems = [], materialBatches = []) {
+  return materialBatches.map((batch) => {
+    const material = materialItems.find((item) => item.code === batch.materialCode) || {};
+    return {
+      code: batch.materialCode,
+      name: material.name || "历史库存",
+      spec: material.spec || "",
+      stockQty: Number(batch.stockQty || 0),
+      safetyQty: Number(material.safetyQty || 0),
+      unit: material.unit || "",
+      location: batch.location || material.defaultLocation || "",
+      batchNo: batch.batchNo,
+      expiryDate: batch.expiryDate || "",
+      receivedDate: batch.receivedDate || "",
+      supplier: batch.supplier || material.supplier || "",
+      materialBatchId: batch.id,
+      batchStatus: getBatchExpiryStatus(batch),
+    };
+  });
+}
+
+export function getMaterialBatches(materialCode, state = {}) {
+  return (state.materialBatches || []).filter((batch) => batch.materialCode === materialCode);
+}
+
+export function getMaterialStockSummary(materialCode, state = {}) {
+  const material = (state.materialItems || []).find((item) => item.code === materialCode) || {};
+  const batches = getMaterialBatches(materialCode, state);
+  const totalStockQty = batches.reduce((sum, batch) => sum + Number(batch.stockQty || 0), 0);
+  const activeExpiryDates = batches
+    .filter((batch) => Number(batch.stockQty || 0) > 0 && batch.expiryDate)
+    .map((batch) => batch.expiryDate)
+    .sort();
+  return {
+    materialCode,
+    name: material.name || "",
+    spec: material.spec || "",
+    unit: material.unit || "",
+    safetyQty: Number(material.safetyQty || 0),
+    totalStockQty,
+    batchCount: batches.length,
+    nearestExpiryDate: activeExpiryDates[0] || "",
+    lowStock: totalStockQty < Number(material.safetyQty || 0),
+    status: material.status || "启用",
+  };
+}
+
+function getMaterialSummaries(state = {}) {
+  return (state.materialItems || []).map((item) => getMaterialStockSummary(item.code, state));
+}
+
+function hydrateInventoryState(data) {
+  const migrated = normalizeLegacyMaterials(data);
+  const materialItems = migrated.materialItems;
+  const materialBatches = migrated.materialBatches;
+  return {
+    materialItems,
+    materialBatches,
+    materials: buildCompatMaterials(materialItems, materialBatches),
+    materialSummaries: getMaterialSummaries({ materialItems, materialBatches }),
+  };
+}
+
+function syncCompatInventory(state) {
+  const inventory = hydrateInventoryState(state);
+  state.materialItems = inventory.materialItems;
+  state.materialBatches = inventory.materialBatches;
+  state.materials = inventory.materials;
+  state.materialSummaries = inventory.materialSummaries;
+  return state;
+}
+
 function normalizeState(data) {
+  const inventory = hydrateInventoryState(data);
   return {
     users: data.users || [],
     samples: data.samples || [],
     workOrders: data.workOrders || [],
-    materials: data.materials || [],
+    materialItems: inventory.materialItems,
+    materialBatches: inventory.materialBatches,
+    materialSummaries: inventory.materialSummaries,
+    materials: inventory.materials,
     reports: data.reports || [],
     stockMovements: data.stockMovements || [],
     activities: data.activities || [],
@@ -205,6 +436,9 @@ function serializePublicState(data) {
   return {
     samples: state.samples,
     workOrders: state.workOrders,
+    materialItems: state.materialItems,
+    materialBatches: state.materialBatches,
+    materialSummaries: state.materialSummaries,
     materials: state.materials,
     reports: state.reports,
     stockMovements: state.stockMovements,
@@ -271,11 +505,12 @@ async function createFileStore(rootDir) {
       return normalizeState(JSON.parse(await readFile(dataFile, "utf8")));
     } catch {
       await writeFile(dataFile, JSON.stringify(seedData, null, 2), "utf8");
-      return clone(seedData);
+      return normalizeState(clone(seedData));
     }
   }
 
   async function writeState(state) {
+    syncCompatInventory(state);
     await writeFile(dataFile, JSON.stringify(state, null, 2), "utf8");
   }
 
@@ -395,41 +630,96 @@ async function createFileStore(rootDir) {
       await writeState(state);
       return { report, state: serializePublicState(state) };
     },
+    async createMaterialItem(input) {
+      const state = await readState();
+      const material = normalizeMaterialItemRecord(input);
+      assertMaterialItemInput(material, state.materialItems);
+      state.materialItems.unshift(material);
+      state.activities.unshift({
+        id: makeId("act"),
+        title: `${material.code} 物料已建档`,
+        meta: `${input.operator} · 刚刚`,
+        note: `${material.name} / ${material.unit} / 安全库存 ${material.safetyQty}${material.unit}`,
+        createdAt: material.createdAt,
+      });
+      await writeState(state);
+      return { material, state: serializePublicState(state) };
+    },
+    async createMaterialBatch(input) {
+      const state = await readState();
+      const material = state.materialItems.find((item) => item.code === input.materialCode);
+      const batch = normalizeMaterialBatchRecord(input, material);
+      assertMaterialBatchInput(batch, state.materialItems, state.materialBatches);
+      const movement = {
+        id: makeId("stk"),
+        materialCode: batch.materialCode,
+        batchNo: batch.batchNo,
+        type: "in",
+        qty: batch.initialQty,
+        location: batch.location,
+        note: batch.note || "新建批次入库",
+        operator: input.operator,
+        source: "admin",
+        beforeQty: 0,
+        afterQty: batch.stockQty,
+        materialBatchId: batch.id,
+        createdAt: new Date().toISOString(),
+      };
+      state.materialBatches.unshift(batch);
+      state.stockMovements.unshift(movement);
+      state.activities.unshift({
+        id: makeId("act"),
+        title: `${material.name} 新批次入库`,
+        meta: `${input.operator} · 刚刚`,
+        note: `${batch.batchNo} · ${batch.initialQty}${material.unit} · ${batch.location}`,
+        createdAt: movement.createdAt,
+      });
+      await writeState(state);
+      return { batch, movement, state: serializePublicState(state) };
+    },
     async createStockMovement(input) {
       const state = await readState();
       const movementInput = normalizeStockMovementInput(input);
-      const material = state.materials.find((item) => item.code === movementInput.materialCode && item.batchNo === movementInput.batchNo);
-      if (!material) throw new Error("物料批次不存在");
-      assertStockMovementInput(movementInput, material.stockQty);
+      const batch = state.materialBatches.find((item) => item.materialCode === movementInput.materialCode && item.batchNo === movementInput.batchNo);
+      if (!batch) throw new Error("物料批次不存在");
+      const material = state.materialItems.find((item) => item.code === batch.materialCode) || {};
+      assertStockMovementInput(movementInput, batch.stockQty);
       const qty = movementInput.qty;
       const sign = movementInput.type === "out" ? -1 : 1;
-      const nextQty = Number(material.stockQty || 0) + sign * qty;
-      material.stockQty = nextQty;
-      if (movementInput.location) material.location = movementInput.location;
+      const beforeQty = Number(batch.stockQty || 0);
+      const nextQty = beforeQty + sign * qty;
+      batch.stockQty = nextQty;
+      batch.updatedAt = new Date().toISOString();
+      if (movementInput.location) batch.location = movementInput.location;
       const movement = {
         id: makeId("stk"),
         materialCode: movementInput.materialCode,
         batchNo: movementInput.batchNo,
         type: movementInput.type,
         qty,
-        location: movementInput.location || material.location,
+        location: movementInput.location || batch.location,
         note: movementInput.note,
         operator: input.operator,
+        source: input.source || "mobile",
+        beforeQty,
+        afterQty: nextQty,
+        materialBatchId: batch.id,
         createdAt: new Date().toISOString(),
       };
       state.stockMovements.unshift(movement);
       state.activities.unshift({
         id: makeId("act"),
-        title: `${material.name} ${movement.type === "out" ? "出库" : "入库"}`,
+        title: `${material.name || movement.materialCode} ${movement.type === "out" ? "出库" : "入库"}`,
         meta: `${input.operator} · 刚刚`,
-        note: `${movement.batchNo} · ${qty}${material.unit} · ${movement.location}`,
+        note: `${movement.batchNo} · ${qty}${material.unit || ""} · ${movement.location}`,
         createdAt: movement.createdAt,
       });
-      if (nextQty < material.safetyQty) {
+      const summary = getMaterialStockSummary(batch.materialCode, state);
+      if (summary.lowStock) {
         state.alerts.unshift({
           id: makeId("al"),
-          title: `${material.name} 库存不足`,
-          text: `${material.code} 当前 ${material.stockQty}${material.unit}，低于安全库存 ${material.safetyQty}${material.unit}。`,
+          title: `${material.name || batch.materialCode} 库存不足`,
+          text: `${batch.materialCode} 当前 ${summary.totalStockQty}${material.unit || ""}，低于安全库存 ${summary.safetyQty}${material.unit || ""}。`,
           severity: "high",
           status: "open",
           createdAt: movement.createdAt,
@@ -446,6 +736,7 @@ async function createPostgresStore() {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined });
   await ensureSchema(pool);
   await seedIfNeeded(pool);
+  await migrateLegacyInventory(pool);
 
   return {
     kind: "postgres",
@@ -623,46 +914,128 @@ async function createPostgresStore() {
         client.release();
       }
     },
+    async createMaterialItem(input) {
+      const existing = await readPostgresState(pool);
+      const material = normalizeMaterialItemRecord(input);
+      assertMaterialItemInput(material, existing.materialItems);
+      await pool.query(
+        "insert into material_items(code,name,spec,unit,safety_qty,default_location,supplier,status,created_at,updated_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+        [material.code, material.name, material.spec, material.unit, material.safetyQty, material.defaultLocation, material.supplier, material.status, material.createdAt, material.updatedAt]
+      );
+      await pool.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
+        makeId("act"),
+        `${material.code} 物料已建档`,
+        `${input.operator} · 刚刚`,
+        `${material.name} / ${material.unit} / 安全库存 ${material.safetyQty}${material.unit}`,
+        material.createdAt,
+      ]);
+      return { material, state: serializePublicState(await readPostgresState(pool)) };
+    },
+    async createMaterialBatch(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const materialRows = await client.query('select code, name, spec, unit, safety_qty as "safetyQty", default_location as "defaultLocation", supplier, status, created_at as "createdAt", updated_at as "updatedAt" from material_items order by code');
+        const batchRows = await client.query('select id, material_code as "materialCode", batch_no as "batchNo", initial_qty as "initialQty", stock_qty as "stockQty", location, received_date as "receivedDate", expiry_date as "expiryDate", supplier, note, created_at as "createdAt", updated_at as "updatedAt" from material_batches order by material_code, batch_no');
+        const materialItems = materialRows.rows.map((item) => ({ ...item, safetyQty: Number(item.safetyQty) }));
+        const materialBatches = batchRows.rows.map((item) => ({ ...item, initialQty: Number(item.initialQty), stockQty: Number(item.stockQty) }));
+        const material = materialItems.find((item) => item.code === input.materialCode);
+        const batch = normalizeMaterialBatchRecord(input, material);
+        assertMaterialBatchInput(batch, materialItems, materialBatches);
+        const movement = {
+          id: makeId("stk"),
+          materialCode: batch.materialCode,
+          batchNo: batch.batchNo,
+          type: "in",
+          qty: batch.initialQty,
+          location: batch.location,
+          note: batch.note || "新建批次入库",
+          operator: input.operator,
+          source: "admin",
+          beforeQty: 0,
+          afterQty: batch.stockQty,
+          materialBatchId: batch.id,
+          createdAt: new Date().toISOString(),
+        };
+        await client.query(
+          "insert into material_batches(id,material_code,batch_no,initial_qty,stock_qty,location,received_date,expiry_date,supplier,note,created_at,updated_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+          [batch.id, batch.materialCode, batch.batchNo, batch.initialQty, batch.stockQty, batch.location, batch.receivedDate, batch.expiryDate, batch.supplier, batch.note, batch.createdAt, batch.updatedAt]
+        );
+        await client.query(
+          "insert into materials(code,name,spec,stock_qty,safety_qty,unit,location,batch_no,expiry_date) values($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict(code,batch_no) do update set name=excluded.name,spec=excluded.spec,stock_qty=excluded.stock_qty,safety_qty=excluded.safety_qty,unit=excluded.unit,location=excluded.location,expiry_date=excluded.expiry_date",
+          [material.code, material.name, material.spec, batch.stockQty, material.safetyQty, material.unit, batch.location, batch.batchNo, batch.expiryDate]
+        );
+        await client.query(
+          "insert into stock_movements(id, material_code, batch_no, type, qty, location, note, operator, source, before_qty, after_qty, material_batch_id, created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+          [movement.id, movement.materialCode, movement.batchNo, movement.type, movement.qty, movement.location, movement.note, movement.operator, movement.source, movement.beforeQty, movement.afterQty, movement.materialBatchId, movement.createdAt]
+        );
+        await client.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
+          makeId("act"),
+          `${material.name} 新批次入库`,
+          `${input.operator} · 刚刚`,
+          `${batch.batchNo} · ${batch.initialQty}${material.unit} · ${batch.location}`,
+          movement.createdAt,
+        ]);
+        await client.query("commit");
+        return { batch, movement, state: serializePublicState(await readPostgresState(pool)) };
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
     async createStockMovement(input) {
       const client = await pool.connect();
       try {
         await client.query("begin");
         const movementInput = normalizeStockMovementInput(input);
-        const result = await client.query("select * from materials where code=$1 and batch_no=$2 for update", [movementInput.materialCode, movementInput.batchNo]);
-        const material = result.rows[0];
-        if (!material) throw new Error("物料批次不存在");
-        assertStockMovementInput(movementInput, material.stock_qty);
+        const result = await client.query(
+          "select b.*, i.name, i.spec, i.unit, i.safety_qty from material_batches b left join material_items i on i.code=b.material_code where b.material_code=$1 and b.batch_no=$2 for update",
+          [movementInput.materialCode, movementInput.batchNo]
+        );
+        const batch = result.rows[0];
+        if (!batch) throw new Error("物料批次不存在");
+        assertStockMovementInput(movementInput, batch.stock_qty);
         const qty = movementInput.qty;
         const sign = movementInput.type === "out" ? -1 : 1;
-        const nextQty = Number(material.stock_qty) + sign * qty;
+        const beforeQty = Number(batch.stock_qty);
+        const nextQty = beforeQty + sign * qty;
         const movement = {
           id: makeId("stk"),
           materialCode: movementInput.materialCode,
           batchNo: movementInput.batchNo,
           type: movementInput.type,
           qty,
-          location: movementInput.location || material.location,
+          location: movementInput.location || batch.location,
           note: movementInput.note,
           operator: input.operator,
+          source: input.source || "mobile",
+          beforeQty,
+          afterQty: nextQty,
+          materialBatchId: batch.id,
           createdAt: new Date().toISOString(),
         };
+        await client.query("update material_batches set stock_qty=$1, location=$2, updated_at=$3 where material_code=$4 and batch_no=$5", [nextQty, movement.location, movement.createdAt, movementInput.materialCode, movementInput.batchNo]);
         await client.query("update materials set stock_qty=$1, location=$2 where code=$3 and batch_no=$4", [nextQty, movement.location, movementInput.materialCode, movementInput.batchNo]);
         await client.query(
-          "insert into stock_movements(id, material_code, batch_no, type, qty, location, note, operator, created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-          [movement.id, movement.materialCode, movement.batchNo, movement.type, movement.qty, movement.location, movement.note, movement.operator, movement.createdAt]
+          "insert into stock_movements(id, material_code, batch_no, type, qty, location, note, operator, source, before_qty, after_qty, material_batch_id, created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+          [movement.id, movement.materialCode, movement.batchNo, movement.type, movement.qty, movement.location, movement.note, movement.operator, movement.source, movement.beforeQty, movement.afterQty, movement.materialBatchId, movement.createdAt]
         );
         await client.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
           makeId("act"),
-          `${material.name} ${movement.type === "out" ? "出库" : "入库"}`,
+          `${batch.name || movement.materialCode} ${movement.type === "out" ? "出库" : "入库"}`,
           `${input.operator} · 刚刚`,
-          `${movement.batchNo} · ${qty}${material.unit} · ${movement.location}`,
+          `${movement.batchNo} · ${qty}${batch.unit || ""} · ${movement.location}`,
           movement.createdAt,
         ]);
-        if (nextQty < Number(material.safety_qty)) {
+        const totalResult = await client.query("select coalesce(sum(stock_qty),0)::numeric as total from material_batches where material_code=$1", [movementInput.materialCode]);
+        const totalStockQty = Number(totalResult.rows[0].total || 0);
+        if (totalStockQty < Number(batch.safety_qty || 0)) {
           await client.query("insert into alerts(id,title,text,severity,status,created_at) values($1,$2,$3,$4,$5,$6)", [
             makeId("al"),
-            `${material.name} 库存不足`,
-            `${material.code} 当前 ${nextQty}${material.unit}，低于安全库存 ${material.safety_qty}${material.unit}。`,
+            `${batch.name || movement.materialCode} 库存不足`,
+            `${movementInput.materialCode} 当前 ${totalStockQty}${batch.unit || ""}，低于安全库存 ${batch.safety_qty}${batch.unit || ""}。`,
             "high",
             "open",
             movement.createdAt,
@@ -723,6 +1096,33 @@ async function ensureSchema(pool) {
       expiry_date date,
       primary key(code, batch_no)
     );
+    create table if not exists material_items (
+      code text primary key,
+      name text not null,
+      spec text,
+      unit text not null,
+      safety_qty numeric not null default 0,
+      default_location text,
+      supplier text,
+      status text not null default '启用',
+      created_at timestamptz default now(),
+      updated_at timestamptz default now()
+    );
+    create table if not exists material_batches (
+      id text primary key,
+      material_code text not null references material_items(code),
+      batch_no text not null,
+      initial_qty numeric not null default 0,
+      stock_qty numeric not null default 0,
+      location text not null,
+      received_date date not null,
+      expiry_date date not null,
+      supplier text,
+      note text,
+      created_at timestamptz default now(),
+      updated_at timestamptz default now(),
+      unique(material_code, batch_no)
+    );
     create table if not exists reports (
       id text primary key,
       work_order_id text not null,
@@ -764,6 +1164,46 @@ async function ensureSchema(pool) {
   `);
   await pool.query("alter table reports add column if not exists completed_qty integer not null default 0");
   await pool.query("alter table reports add column if not exists bad_reason text");
+  await pool.query("alter table stock_movements add column if not exists source text");
+  await pool.query("alter table stock_movements add column if not exists before_qty numeric");
+  await pool.query("alter table stock_movements add column if not exists after_qty numeric");
+  await pool.query("alter table stock_movements add column if not exists material_batch_id text");
+}
+
+async function migrateLegacyInventory(pool) {
+  const legacy = await pool.query('select code, name, spec, stock_qty as "stockQty", safety_qty as "safetyQty", unit, location, batch_no as "batchNo", expiry_date as "expiryDate" from materials order by code');
+  for (const row of legacy.rows) {
+    if (!row.code) continue;
+    const material = normalizeMaterialItemRecord({
+      code: row.code,
+      name: row.name,
+      spec: row.spec,
+      unit: row.unit,
+      safetyQty: Number(row.safetyQty || 0),
+      defaultLocation: row.location,
+      status: "启用",
+    });
+    await pool.query(
+      "insert into material_items(code,name,spec,unit,safety_qty,default_location,supplier,status,created_at,updated_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict(code) do nothing",
+      [material.code, material.name, material.spec, material.unit, material.safetyQty, material.defaultLocation, material.supplier, material.status, material.createdAt, material.updatedAt]
+    );
+    if (!row.batchNo) continue;
+    const batch = normalizeMaterialBatchRecord({
+      id: `legacy-${row.code}-${row.batchNo}`.replace(/[^a-zA-Z0-9_-]/g, "-"),
+      materialCode: row.code,
+      batchNo: row.batchNo,
+      initialQty: Number(row.stockQty || 0),
+      stockQty: Number(row.stockQty || 0),
+      location: row.location || material.defaultLocation || "历史库存",
+      receivedDate: dateOnly(new Date()),
+      expiryDate: row.expiryDate || "2099-12-31",
+      note: "历史库存迁移",
+    }, material);
+    await pool.query(
+      "insert into material_batches(id,material_code,batch_no,initial_qty,stock_qty,location,received_date,expiry_date,supplier,note,created_at,updated_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict(material_code,batch_no) do nothing",
+      [batch.id, batch.materialCode, batch.batchNo, batch.initialQty, batch.stockQty, batch.location, batch.receivedDate, batch.expiryDate, batch.supplier, batch.note, batch.createdAt, batch.updatedAt]
+    );
+  }
 }
 
 async function seedIfNeeded(pool) {
@@ -796,15 +1236,16 @@ async function seedIfNeeded(pool) {
 }
 
 async function readPostgresState(pool) {
-  const [users, samples, workOrders, materials, reports, stockMovements, activities, alerts] = await Promise.all([
+  const [users, samples, workOrders, materialItems, materialBatches, reports, stockMovements, activities, alerts] = await Promise.all([
     pool.query("select id, username, name, role from app_users order by created_at"),
     pool.query("select id, name, customer, version, owner, due_date as \"dueDate\", status from samples order by id"),
     pool.query('select id, sample_id as "sampleId", product, planned_qty as "plannedQty", done_qty as "doneQty", current_process as "currentProcess", priority, status, due_at as "dueAt", route from work_orders order by id'),
-    pool.query('select code, name, spec, stock_qty as "stockQty", safety_qty as "safetyQty", unit, location, batch_no as "batchNo", expiry_date as "expiryDate" from materials order by code'),
+    pool.query('select code, name, spec, unit, safety_qty as "safetyQty", default_location as "defaultLocation", supplier, status, created_at as "createdAt", updated_at as "updatedAt" from material_items order by code'),
+    pool.query('select id, material_code as "materialCode", batch_no as "batchNo", initial_qty as "initialQty", stock_qty as "stockQty", location, received_date as "receivedDate", expiry_date as "expiryDate", supplier, note, created_at as "createdAt", updated_at as "updatedAt" from material_batches order by material_code, batch_no'),
     pool.query(
       'select id, work_order_id as "workOrderId", process_name as "processName", completed_qty as "completedQty", good_qty as "goodQty", bad_qty as "badQty", bad_reason as "badReason", note, operator, created_at as "createdAt" from reports order by created_at desc limit 200'
     ),
-    pool.query('select id, material_code as "materialCode", batch_no as "batchNo", type, qty, location, note, operator, created_at as "createdAt" from stock_movements order by created_at desc limit 50'),
+    pool.query('select id, material_code as "materialCode", batch_no as "batchNo", type, qty, location, note, operator, source, before_qty as "beforeQty", after_qty as "afterQty", material_batch_id as "materialBatchId", created_at as "createdAt" from stock_movements order by created_at desc limit 50'),
     pool.query('select id, title, meta, note, created_at as "createdAt" from activities order by created_at desc limit 50'),
     pool.query('select id, title, text, severity, status, created_at as "createdAt" from alerts order by created_at desc limit 50'),
   ]);
@@ -812,9 +1253,15 @@ async function readPostgresState(pool) {
     users: users.rows,
     samples: samples.rows,
     workOrders: workOrders.rows,
-    materials: materials.rows.map((item) => ({ ...item, stockQty: Number(item.stockQty), safetyQty: Number(item.safetyQty) })),
+    materialItems: materialItems.rows.map((item) => ({ ...item, safetyQty: Number(item.safetyQty) })),
+    materialBatches: materialBatches.rows.map((item) => ({ ...item, initialQty: Number(item.initialQty), stockQty: Number(item.stockQty) })),
     reports: reports.rows,
-    stockMovements: stockMovements.rows,
+    stockMovements: stockMovements.rows.map((item) => ({
+      ...item,
+      qty: Number(item.qty),
+      beforeQty: item.beforeQty === null || item.beforeQty === undefined ? undefined : Number(item.beforeQty),
+      afterQty: item.afterQty === null || item.afterQty === undefined ? undefined : Number(item.afterQty),
+    })),
     activities: activities.rows,
     alerts: alerts.rows,
   });
