@@ -205,7 +205,6 @@
       </article>
     </div>
 
-    <script src="./qr-lite.js"></script>
     <script>
       const params = new URLSearchParams(window.location.search);
       const batch = String(params.get('batch') || '').trim();
@@ -243,18 +242,34 @@
 
       const qrImage = document.getElementById('qr-image');
       const qrFallback = document.getElementById('qr-fallback');
-      if (batch && window.QrLite) {
+      function showQrFallback(message = '当前无法生成二维码，请先复制扫码链接或批次码使用。') {
+        qrImage.style.display = 'none';
+        qrFallback.style.display = 'block';
+        qrFallback.textContent = message;
+      }
+
+      function renderBatchQr() {
+        if (!batch) {
+          showQrFallback('未传入批次码，请从管理端批次里重新打开标签页。');
+          return;
+        }
+        if (!window.QrLite) {
+          showQrFallback('二维码生成器未加载完成，请刷新页面；也可以先复制扫码链接使用。');
+          return;
+        }
         try {
           qrImage.innerHTML = window.QrLite.renderSvg(mobileLink, { scale: 8, border: 4 });
         } catch (error) {
-          qrImage.style.display = 'none';
-          qrFallback.style.display = 'block';
-          qrFallback.textContent = error.message || '当前无法生成二维码，请先复制扫码链接或批次码使用。';
+          showQrFallback(error.message);
         }
-      } else {
-        qrImage.style.display = 'none';
-        qrFallback.style.display = 'block';
       }
+
+      const qrScript = document.createElement('script');
+      qrScript.src = './qr-lite.js?v=2';
+      qrScript.async = true;
+      qrScript.onload = renderBatchQr;
+      qrScript.onerror = () => showQrFallback('二维码生成器加载失败，请刷新页面；也可以先复制扫码链接使用。');
+      document.head.appendChild(qrScript);
 
       document.getElementById('copy-code-btn').addEventListener('click', async () => {
         if (!batch) return;
