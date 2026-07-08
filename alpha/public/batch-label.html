@@ -124,7 +124,7 @@
         border-radius: 8px;
         background: #fff;
       }
-      .qr-wrap img {
+      .qr-wrap svg {
         width: min(100%, 260px);
         height: auto;
       }
@@ -187,10 +187,10 @@
         <article class="card">
           <div class="meta-label">二维码预览</div>
           <div class="qr-wrap" id="qr-wrap">
-            <img id="qr-image" alt="批次二维码" />
+            <div id="qr-image"></div>
             <div id="qr-fallback" class="code-block" style="display:none;">当前无法加载二维码图片，请先复制扫码链接或批次码使用。</div>
           </div>
-          <p>演示版二维码图片调用公开二维码生成服务。后续做正式版时，建议把二维码生成放到你自己的前端或后端里，不依赖外部服务。</p>
+          <p>二维码由系统页面直接生成，不依赖外部二维码图片服务；线上部署后，换电脑或手机也能继续使用。</p>
         </article>
       </section>
 
@@ -205,6 +205,7 @@
       </article>
     </div>
 
+    <script src="./qr-lite.js"></script>
     <script>
       const params = new URLSearchParams(window.location.search);
       const batch = String(params.get('batch') || '').trim();
@@ -213,7 +214,6 @@
       const batchNo = parts[2] || '-';
       const location = parts.slice(3).join('|') || '-';
       const mobileLink = `${window.location.origin}/mobile.html?batch=${encodeURIComponent(batch)}`;
-      const qrService = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(mobileLink)}`;
 
       const metaItems = [
         ['料号', materialCode],
@@ -243,12 +243,14 @@
 
       const qrImage = document.getElementById('qr-image');
       const qrFallback = document.getElementById('qr-fallback');
-      if (batch) {
-        qrImage.src = qrService;
-        qrImage.onerror = () => {
+      if (batch && window.QrLite) {
+        try {
+          qrImage.innerHTML = window.QrLite.renderSvg(mobileLink, { scale: 8, border: 4 });
+        } catch (error) {
           qrImage.style.display = 'none';
           qrFallback.style.display = 'block';
-        };
+          qrFallback.textContent = error.message || '当前无法生成二维码，请先复制扫码链接或批次码使用。';
+        }
       } else {
         qrImage.style.display = 'none';
         qrFallback.style.display = 'block';
