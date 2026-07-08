@@ -91,7 +91,8 @@ async function api(path, options = {}) {
       ...(options.headers || {}),
     },
   });
-  const payload = await response.json();
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json") ? await response.json() : { message: await response.text() };
   if (!response.ok) throw new Error(payload.message || "请求失败");
   return payload;
 }
@@ -111,6 +112,16 @@ function showToast(message) {
 function renderUser() {
   const user = state.currentUser;
   document.getElementById("current-user").textContent = user ? `${user.name} · ${roleLabels[user.role] || user.role}` : "未登录";
+}
+
+function disableBrowserSuggestions(scope = document) {
+  scope.querySelectorAll("form").forEach((form) => form.setAttribute("autocomplete", "off"));
+  scope.querySelectorAll("input, textarea").forEach((field) => {
+    field.setAttribute("autocomplete", "off");
+    field.setAttribute("autocorrect", "off");
+    field.setAttribute("autocapitalize", "off");
+    field.setAttribute("spellcheck", "false");
+  });
 }
 
 function escapeHtml(value = "") {
@@ -1479,6 +1490,7 @@ function renderAll() {
   renderMaterials();
   renderReporting();
   renderAlerts();
+  disableBrowserSuggestions();
 }
 
 function setView(viewKey) {
@@ -1576,6 +1588,7 @@ function bindEvents() {
 
 bindEvents();
 renderUser();
+disableBrowserSuggestions();
 
 if (token()) {
   setLoggedIn(true);
