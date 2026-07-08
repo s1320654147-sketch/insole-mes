@@ -211,13 +211,13 @@
       const parts = batch.split('|');
       const materialCode = parts[1] || '-';
       const batchNo = parts[2] || '-';
-      const location = parts.slice(3).join('|') || '-';
+      const batchLocation = parts.slice(3).join('|') || '-';
       const mobileLink = `${window.location.origin}/mobile.html?batch=${encodeURIComponent(batch)}`;
 
       const metaItems = [
         ['料号', materialCode],
         ['批次', batchNo],
-        ['库位', location],
+        ['库位', batchLocation],
         ['标签用途', '原材料收发 / 批次追溯'],
       ];
 
