@@ -175,6 +175,7 @@ function normalizeStockMovementInput(input, fallback = {}) {
     qty: Number(input.qty ?? fallback.qty ?? 0),
     location: String(input.location || fallback.location || "").trim(),
     note: String(input.note || fallback.note || "").trim(),
+    overrideReason: String(input.overrideReason || input.forceReason || fallback.overrideReason || fallback.forceReason || "").trim(),
   };
 }
 
@@ -209,14 +210,33 @@ function addDays(dateValue, days) {
   return dateOnly(date);
 }
 
+export const EXPIRING_SOON_DAYS = 30;
+
+export function getDaysUntilExpiry(batch, now = new Date()) {
+  const expiryDate = dateOnly(batch?.expiryDate);
+  if (!expiryDate) return null;
+  const todayDate = new Date(dateOnly(now));
+  const expiry = new Date(expiryDate);
+  return Math.round((expiry.getTime() - todayDate.getTime()) / 86400000);
+}
+
 export function getBatchExpiryStatus(batch, now = new Date()) {
   if (Number(batch?.stockQty || 0) <= 0) return "已用完";
   const expiryDate = dateOnly(batch?.expiryDate);
   if (!expiryDate) return "正常";
   const today = dateOnly(now);
   if (expiryDate < today) return "已过期";
-  if (expiryDate <= addDays(now, 30)) return "即将过期";
+  if (expiryDate <= addDays(now, EXPIRING_SOON_DAYS)) return "即将过期";
   return "正常";
+}
+
+export function getBatchRiskStatus(batch, material = {}, now = new Date()) {
+  return {
+    status: getBatchExpiryStatus(batch, now),
+    daysUntilExpiry: getDaysUntilExpiry(batch, now),
+    lowStock: false,
+    unit: material.unit || "",
+  };
 }
 
 function normalizeMaterialItemInput(input = {}, fallback = {}) {
@@ -360,6 +380,7 @@ function buildCompatMaterials(materialItems = [], materialBatches = []) {
       supplier: batch.supplier || material.supplier || "",
       materialBatchId: batch.id,
       batchStatus: getBatchExpiryStatus(batch),
+      daysUntilExpiry: getDaysUntilExpiry(batch),
     };
   });
 }
@@ -386,12 +407,93 @@ export function getMaterialStockSummary(materialCode, state = {}) {
     batchCount: batches.length,
     nearestExpiryDate: activeExpiryDates[0] || "",
     lowStock: totalStockQty < Number(material.safetyQty || 0),
+    expiringSoonBatchCount: batches.filter((batch) => getBatchExpiryStatus(batch) === "即将过期").length,
+    expiredBatchCount: batches.filter((batch) => getBatchExpiryStatus(batch) === "已过期").length,
+    usedUpBatchCount: batches.filter((batch) => getBatchExpiryStatus(batch) === "已用完").length,
     status: material.status || "启用",
   };
 }
 
 function getMaterialSummaries(state = {}) {
   return (state.materialItems || []).map((item) => getMaterialStockSummary(item.code, state));
+}
+
+function sortBatchesForFefo(left, right) {
+  const leftExpiry = dateOnly(left.expiryDate) || "9999-12-31";
+  const rightExpiry = dateOnly(right.expiryDate) || "9999-12-31";
+  if (leftExpiry !== rightExpiry) return leftExpiry.localeCompare(rightExpiry);
+  const leftReceived = dateOnly(left.receivedDate) || "9999-12-31";
+  const rightReceived = dateOnly(right.receivedDate) || "9999-12-31";
+  if (leftReceived !== rightReceived) return leftReceived.localeCompare(rightReceived);
+  return String(left.batchNo || "").localeCompare(String(right.batchNo || ""));
+}
+
+export function buildFefoIssuePlan(materialCode, qty, state = {}, options = {}) {
+  const requestedQty = Number(qty || 0);
+  const now = options.now || new Date();
+  const includeExpired = Boolean(options.includeExpired);
+  const material = (state.materialItems || []).find((item) => item.code === materialCode) || {};
+  const allUsable = getMaterialBatches(materialCode, state)
+    .filter((batch) => Number(batch.stockQty || 0) > 0)
+    .map((batch) => ({
+      ...batch,
+      batchStatus: getBatchExpiryStatus(batch, now),
+      daysUntilExpiry: getDaysUntilExpiry(batch, now),
+    }));
+  const nonExpired = allUsable.filter((batch) => batch.batchStatus !== "已过期");
+  const candidates = (includeExpired ? allUsable : nonExpired).sort(sortBatchesForFefo);
+  const plan = [];
+  let remainingQty = Math.max(0, requestedQty);
+  for (const batch of candidates) {
+    if (remainingQty <= 0) break;
+    const issueQty = Math.min(Number(batch.stockQty || 0), remainingQty);
+    if (issueQty <= 0) continue;
+    plan.push({
+      materialCode: batch.materialCode,
+      batchNo: batch.batchNo,
+      qty: issueQty,
+      stockQty: Number(batch.stockQty || 0),
+      location: batch.location || material.defaultLocation || "",
+      expiryDate: batch.expiryDate || "",
+      receivedDate: batch.receivedDate || "",
+      status: batch.batchStatus,
+      daysUntilExpiry: batch.daysUntilExpiry,
+      unit: material.unit || "",
+    });
+    remainingQty -= issueQty;
+  }
+  const expiredAvailableQty = allUsable
+    .filter((batch) => batch.batchStatus === "已过期")
+    .reduce((sum, batch) => sum + Number(batch.stockQty || 0), 0);
+  return {
+    materialCode,
+    requestedQty,
+    unit: material.unit || "",
+    recommendedBatch: plan[0] || null,
+    plan,
+    remainingQty,
+    isEnough: requestedQty > 0 && remainingQty <= 0,
+    hasUnexpiredStock: nonExpired.length > 0,
+    expiredAvailableQty,
+  };
+}
+
+function assertFefoStockMovement(movement, batch, state = {}, now = new Date()) {
+  if (movement.type !== "out") return null;
+  const batchStatus = getBatchExpiryStatus(batch, now);
+  const reason = String(movement.overrideReason || "").trim();
+  if (batchStatus === "已过期" && !reason) {
+    throw new Error("当前批次已过期，强制出库必须填写原因");
+  }
+  if (batchStatus !== "已过期") {
+    const plan = buildFefoIssuePlan(movement.materialCode, movement.qty, state, { now });
+    const recommended = plan.recommendedBatch;
+    if (recommended && recommended.batchNo !== movement.batchNo && !reason) {
+      throw new Error(`当前不是 FEFO 推荐批次，请填写原因后再出库；建议优先使用 ${recommended.batchNo}`);
+    }
+    return plan;
+  }
+  return buildFefoIssuePlan(movement.materialCode, movement.qty, state, { now, includeExpired: true });
 }
 
 function hydrateInventoryState(data) {
@@ -699,6 +801,10 @@ async function createFileStore(rootDir) {
       await writeState(state);
       return { batch, movement, state: serializePublicState(state) };
     },
+    async getFefoRecommendation(materialCode, qty, options = {}) {
+      const state = await readState();
+      return buildFefoIssuePlan(materialCode, qty, state, options);
+    },
     async createStockMovement(input) {
       const state = await readState();
       const movementInput = normalizeStockMovementInput(input);
@@ -706,6 +812,7 @@ async function createFileStore(rootDir) {
       if (!batch) throw new Error("物料批次不存在");
       const material = state.materialItems.find((item) => item.code === batch.materialCode) || {};
       assertStockMovementInput(movementInput, batch.stockQty);
+      const fefoPlan = assertFefoStockMovement(movementInput, batch, state);
       const qty = movementInput.qty;
       const sign = movementInput.type === "out" ? -1 : 1;
       const beforeQty = Number(batch.stockQty || 0);
@@ -720,12 +827,14 @@ async function createFileStore(rootDir) {
         type: movementInput.type,
         qty,
         location: movementInput.location || batch.location,
-        note: movementInput.note,
+        note: [movementInput.note, movementInput.overrideReason ? `FEFO原因：${movementInput.overrideReason}` : ""].filter(Boolean).join("；"),
         operator: input.operator,
         source: input.source || "mobile",
         beforeQty,
         afterQty: nextQty,
         materialBatchId: batch.id,
+        overrideReason: movementInput.overrideReason,
+        recommendedBatchNo: fefoPlan?.recommendedBatch?.batchNo || "",
         createdAt: new Date().toISOString(),
       };
       state.stockMovements.unshift(movement);
@@ -1038,6 +1147,10 @@ async function createPostgresStore() {
         client.release();
       }
     },
+    async getFefoRecommendation(materialCode, qty, options = {}) {
+      const state = await readPostgresState(pool);
+      return buildFefoIssuePlan(materialCode, qty, state, options);
+    },
     async createStockMovement(input) {
       const client = await pool.connect();
       try {
@@ -1055,6 +1168,16 @@ async function createPostgresStore() {
         );
         const material = materialResult.rows[0] || {};
         assertStockMovementInput(movementInput, batch.stock_qty);
+        const stateForFefo = await readPostgresState(pool);
+        const selectedBatchForFefo = (stateForFefo.materialBatches || []).find((item) => item.materialCode === movementInput.materialCode && item.batchNo === movementInput.batchNo) || {
+          materialCode: batch.material_code,
+          batchNo: batch.batch_no,
+          stockQty: Number(batch.stock_qty || 0),
+          location: batch.location,
+          receivedDate: batch.received_date,
+          expiryDate: batch.expiry_date,
+        };
+        const fefoPlan = assertFefoStockMovement(movementInput, selectedBatchForFefo, stateForFefo);
         const qty = movementInput.qty;
         const sign = movementInput.type === "out" ? -1 : 1;
         const beforeQty = Number(batch.stock_qty);
@@ -1066,12 +1189,14 @@ async function createPostgresStore() {
           type: movementInput.type,
           qty,
           location: movementInput.location || batch.location,
-          note: movementInput.note,
+          note: [movementInput.note, movementInput.overrideReason ? `FEFO原因：${movementInput.overrideReason}` : ""].filter(Boolean).join("；"),
           operator: input.operator,
           source: input.source || "mobile",
           beforeQty,
           afterQty: nextQty,
           materialBatchId: batch.id,
+          overrideReason: movementInput.overrideReason,
+          recommendedBatchNo: fefoPlan?.recommendedBatch?.batchNo || "",
           createdAt: new Date().toISOString(),
         };
         await client.query("update material_batches set stock_qty=$1, location=$2, updated_at=$3 where material_code=$4 and batch_no=$5", [nextQty, movement.location, movement.createdAt, movementInput.materialCode, movementInput.batchNo]);

@@ -155,6 +155,18 @@ async function handleApi(request, response, url) {
     return true;
   }
 
+  const fefoMatch = url.pathname.match(/^\/api\/material-items\/([^/]+)\/fefo$/);
+  if (fefoMatch && request.method === "GET") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    const materialCode = decodeURIComponent(fefoMatch[1]);
+    const qty = Number(url.searchParams.get("qty") || 0);
+    const includeExpired = url.searchParams.get("includeExpired") === "1";
+    const recommendation = await store.getFefoRecommendation(materialCode, qty, { includeExpired });
+    sendJson(response, 200, { recommendation });
+    return true;
+  }
+
   if (url.pathname === "/api/material-items/save" && request.method === "POST") {
     const user = requireUser(request, response);
     if (!user) return true;

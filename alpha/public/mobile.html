@@ -167,6 +167,11 @@
               备注
               <textarea id="stock-note" rows="2" placeholder="例如：采购到货、领料、退料、盘点调整"></textarea>
             </label>
+            <div class="scan-preview" id="stock-fefo-preview">出库时会显示 FEFO 推荐。</div>
+            <label class="hidden" id="stock-override-wrap">
+              不按推荐 / 过期强制出库原因
+              <textarea id="stock-override-reason" rows="2" placeholder="例如：研发试料、客户指定、异常处理"></textarea>
+            </label>
             <button class="secondary-submit" id="stock-submit-btn" type="submit">提交入库</button>
           </form>
         </section>

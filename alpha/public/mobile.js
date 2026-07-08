@@ -193,6 +193,90 @@ function selectValueForMaterial(material) {
   return `${material.code}|${material.batchNo}|${material.location || ""}`;
 }
 
+function getBatchStatus(material) {
+  if (material?.batchStatus) return material.batchStatus;
+  if (Number(material?.stockQty || 0) <= 0) return "已用完";
+  const expiryDate = String(material?.expiryDate || "").slice(0, 10);
+  if (!expiryDate) return "正常";
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const soon = new Date(today);
+  soon.setHours(0, 0, 0, 0);
+  soon.setDate(soon.getDate() + 30);
+  const soonKey = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
+  if (expiryDate < todayKey) return "已过期";
+  if (expiryDate <= soonKey) return "即将过期";
+  return "正常";
+}
+
+function buildLocalFefoPlan(materialCode, qty, includeExpired = false) {
+  const candidates = (mobileState.data?.materials || [])
+    .filter((item) => item.code === materialCode && Number(item.stockQty || 0) > 0)
+    .map((item) => ({ ...item, status: getBatchStatus(item) }))
+    .filter((item) => includeExpired || item.status !== "已过期")
+    .sort((left, right) => {
+      const leftExpiry = String(left.expiryDate || "9999-12-31").slice(0, 10);
+      const rightExpiry = String(right.expiryDate || "9999-12-31").slice(0, 10);
+      if (leftExpiry !== rightExpiry) return leftExpiry.localeCompare(rightExpiry);
+      const leftReceived = String(left.receivedDate || "9999-12-31").slice(0, 10);
+      const rightReceived = String(right.receivedDate || "9999-12-31").slice(0, 10);
+      if (leftReceived !== rightReceived) return leftReceived.localeCompare(rightReceived);
+      return String(left.batchNo || "").localeCompare(String(right.batchNo || ""));
+    });
+  let remainingQty = Math.max(0, Number(qty || 0));
+  const plan = [];
+  for (const item of candidates) {
+    if (remainingQty <= 0) break;
+    const issueQty = Math.min(Number(item.stockQty || 0), remainingQty);
+    plan.push({ ...item, qty: issueQty });
+    remainingQty -= issueQty;
+  }
+  return { plan, recommendedBatch: plan[0] || null, remainingQty, unit: candidates[0]?.unit || "" };
+}
+
+function getSelectedStockMaterial() {
+  const batchValue = document.getElementById("stock-batch")?.value || "";
+  const [materialCode, batchNo] = batchValue.split("|");
+  return findMaterial(materialCode, batchNo);
+}
+
+function buildFefoAdvice(material, qty) {
+  if (!material) {
+    return { title: "未选择批次", text: "先扫码或选择一个批次。", reasonRequired: false, tone: "" };
+  }
+  const status = getBatchStatus(material);
+  const plan = buildLocalFefoPlan(material.code, qty);
+  const planText = plan.plan.length ? plan.plan.map((item) => `${item.batchNo} ${item.qty}${item.unit}`).join(" + ") : "暂无可用未过期批次";
+
+  if (status === "已过期") {
+    return { title: "当前批次已过期", text: `必须填写原因后才能强制出库。推荐拆分：${planText}`, reasonRequired: true, tone: "warn" };
+  }
+  if (!plan.recommendedBatch) {
+    return { title: "没有可推荐批次", text: "当前物料没有可用的未过期库存。", reasonRequired: false, tone: "warn" };
+  }
+  if (plan.recommendedBatch.batchNo !== material.batchNo) {
+    return { title: `FEFO 建议先用 ${plan.recommendedBatch.batchNo}`, text: `如仍要用当前批次，请填写原因。推荐拆分：${planText}`, reasonRequired: true, tone: "warn" };
+  }
+  return { title: "当前批次符合 FEFO", text: `推荐拆分：${planText}${plan.remainingQty > 0 ? `，仍缺 ${plan.remainingQty}${plan.unit}` : ""}`, reasonRequired: false, tone: "running" };
+}
+
+function updateStockFefoPreview() {
+  const preview = document.getElementById("stock-fefo-preview");
+  const reasonWrap = document.getElementById("stock-override-wrap");
+  if (!preview || !reasonWrap) return;
+  const type = document.getElementById("stock-type")?.value || "in";
+  if (type !== "out") {
+    preview.textContent = "入库不需要 FEFO 推荐；出库时会自动提示最早过期批次。";
+    reasonWrap.classList.add("hidden");
+    return;
+  }
+  const material = getSelectedStockMaterial();
+  const qty = Number(document.getElementById("stock-qty")?.value || 0);
+  const advice = buildFefoAdvice(material, qty);
+  preview.innerHTML = `<strong>${escapeHtml(advice.title)}</strong><br>${escapeHtml(advice.text)}`;
+  reasonWrap.classList.toggle("hidden", !advice.reasonRequired);
+}
+
 function getRoleConfig(role) {
   return {
     eyebrow: "现场端",
@@ -420,6 +504,7 @@ function updateStockMode() {
   document.getElementById("stock-qty-label").textContent = type === "out" ? "出库数量" : "入库数量";
   document.getElementById("stock-submit-btn").textContent = type === "out" ? "提交出库" : "提交入库";
   document.getElementById("stock-title").textContent = type === "out" ? "扫码出库" : "扫码入库";
+  updateStockFefoPreview();
 }
 
 function renderStockForm() {
@@ -456,7 +541,7 @@ function renderStockForm() {
     }
   }
 
-  ["stock-type", "stock-batch", "stock-qty", "stock-location", "stock-note", "stock-submit-btn", "scan-input", "scan-apply-btn"].forEach((id) => {
+  ["stock-type", "stock-batch", "stock-qty", "stock-location", "stock-note", "stock-override-reason", "stock-submit-btn", "scan-input", "scan-apply-btn"].forEach((id) => {
     document.getElementById(id).disabled = disabled;
   });
 
@@ -483,6 +568,7 @@ function applyBatchCode(rawValue, announce = true) {
   document.getElementById("scan-preview").textContent = `已识别：${material.name} / ${material.batchNo} / ${parsed.location || material.location}`;
   document.getElementById("stock-batch").value = selectValueForMaterial(material);
   document.getElementById("stock-location").value = parsed.location || material.location || "";
+  updateStockFefoPreview();
   if (announce) showToast("批次已带入表单");
   return true;
 }
@@ -889,6 +975,7 @@ function bindEvents() {
   });
 
   document.getElementById("stock-type").addEventListener("change", updateStockMode);
+  document.getElementById("stock-qty").addEventListener("input", updateStockFefoPreview);
 
   document.getElementById("stock-batch").addEventListener("change", () => {
     const batchValue = document.getElementById("stock-batch").value;
@@ -899,6 +986,7 @@ function bindEvents() {
     mobileState.scanValue = buildBatchCode(material);
     document.getElementById("scan-input").value = mobileState.scanValue;
     document.getElementById("scan-preview").textContent = `当前批次码：${mobileState.scanValue}`;
+    updateStockFefoPreview();
   });
 
   document.getElementById("scan-apply-btn").addEventListener("click", () => {
@@ -940,23 +1028,34 @@ function bindEvents() {
       return;
     }
     const [materialCode, batchNo, defaultLocation] = batchValue.split("|");
+    const material = findMaterial(materialCode, batchNo);
+    const type = document.getElementById("stock-type").value;
+    const qty = Number(document.getElementById("stock-qty").value || 0);
+    const overrideReason = document.getElementById("stock-override-reason").value.trim();
+    const advice = buildFefoAdvice(material, qty);
+    if (type === "out" && advice.reasonRequired && !overrideReason) {
+      showToast("当前批次不符合 FEFO 或已过期，请填写原因");
+      return;
+    }
     try {
       const result = await api("/api/stock-movements", {
         method: "POST",
         body: JSON.stringify({
           materialCode,
           batchNo,
-          type: document.getElementById("stock-type").value,
-          qty: Number(document.getElementById("stock-qty").value || 0),
+          type,
+          qty,
           location: document.getElementById("stock-location").value.trim() || defaultLocation,
           note: document.getElementById("stock-note").value.trim(),
+          overrideReason,
         }),
       });
       mobileState.data = result.state;
       document.getElementById("stock-qty").value = "0";
       document.getElementById("stock-note").value = "";
+      document.getElementById("stock-override-reason").value = "";
       renderAll();
-      showToast(document.getElementById("stock-type").value === "out" ? "出库已同步到管理端" : "入库已同步到管理端");
+      showToast(type === "out" ? "出库已同步到管理端" : "入库已同步到管理端");
     } catch (error) {
       showToast(error.message);
     }

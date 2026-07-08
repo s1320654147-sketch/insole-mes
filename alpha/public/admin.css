@@ -186,6 +186,13 @@ textarea {
   flex-wrap: wrap;
 }
 
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+
 .user-pill {
   display: inline-flex;
   align-items: center;
@@ -219,6 +226,12 @@ textarea {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
+}
+
+.ghost-btn.active-filter {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 
 .slim-btn {
@@ -368,6 +381,32 @@ textarea {
 
 .item-meta,
 .item-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.fefo-advice {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.fefo-advice.running {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.fefo-advice.warn {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.override-reason-field {
+  margin-top: 12px;
+  display: grid;
+  gap: 6px;
   color: var(--muted);
   font-size: 13px;
 }

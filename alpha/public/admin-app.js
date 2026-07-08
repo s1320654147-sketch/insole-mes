@@ -42,6 +42,7 @@ const state = {
   orderEditorMode: "edit",
   materialEditorMode: "edit",
   orderFilter: "all",
+  materialFilter: "all",
   currentUser: null,
   data: null,
 };
@@ -60,6 +61,14 @@ const roleLabels = {
   worker: "工人",
   warehouse: "仓库",
 };
+
+const materialFilterDefinitions = [
+  { key: "all", label: "全部" },
+  { key: "low", label: "低库存" },
+  { key: "soon", label: "即将过期" },
+  { key: "expired", label: "已过期" },
+  { key: "used-up", label: "已用完" },
+];
 
 function token() {
   return localStorage.getItem(tokenKey);
@@ -355,6 +364,22 @@ function getBatchStatus(batch) {
   return "正常";
 }
 
+function daysUntilExpiry(value) {
+  const expiryDate = String(value || "").slice(0, 10);
+  if (!expiryDate) return null;
+  const today = new Date();
+  const todayDate = new Date(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`);
+  const expiry = new Date(expiryDate);
+  return Math.round((expiry.getTime() - todayDate.getTime()) / 86400000);
+}
+
+function batchStatusClass(status) {
+  if (status === "正常") return "running";
+  if (status === "即将过期") return "pending";
+  if (status === "已用完") return "";
+  return "warn";
+}
+
 function getMaterialSummary(materialCode) {
   const fromState = (state.data?.materialSummaries || []).find((item) => item.materialCode === materialCode);
   if (fromState) return fromState;
@@ -375,8 +400,115 @@ function getMaterialSummary(materialCode) {
     batchCount: batches.length,
     nearestExpiryDate,
     lowStock: totalStockQty < Number(material.safetyQty || 0),
+    expiringSoonBatchCount: batches.filter((batch) => getBatchStatus(batch) === "即将过期").length,
+    expiredBatchCount: batches.filter((batch) => getBatchStatus(batch) === "已过期").length,
+    usedUpBatchCount: batches.filter((batch) => getBatchStatus(batch) === "已用完").length,
     status: material.status || "启用",
   };
+}
+
+function matchesMaterialFilter(item, filterKey) {
+  if (filterKey === "all") return true;
+  const summary = getMaterialSummary(item.code);
+  if (filterKey === "low") return Boolean(summary.lowStock);
+  if (filterKey === "soon") return Number(summary.expiringSoonBatchCount || 0) > 0;
+  if (filterKey === "expired") return Number(summary.expiredBatchCount || 0) > 0;
+  if (filterKey === "used-up") return Number(summary.usedUpBatchCount || 0) > 0;
+  return true;
+}
+
+function buildLocalFefoPlan(materialCode, qty, includeExpired = false) {
+  const material = getMaterialItems().find((item) => item.code === materialCode) || {};
+  const candidates = getMaterialBatches()
+    .filter((batch) => batch.materialCode === materialCode && Number(batch.stockQty || 0) > 0)
+    .map((batch) => ({ ...batch, status: getBatchStatus(batch), daysUntilExpiry: daysUntilExpiry(batch.expiryDate) }))
+    .filter((batch) => includeExpired || batch.status !== "已过期")
+    .sort((left, right) => {
+      const leftExpiry = String(left.expiryDate || "9999-12-31").slice(0, 10);
+      const rightExpiry = String(right.expiryDate || "9999-12-31").slice(0, 10);
+      if (leftExpiry !== rightExpiry) return leftExpiry.localeCompare(rightExpiry);
+      const leftReceived = String(left.receivedDate || "9999-12-31").slice(0, 10);
+      const rightReceived = String(right.receivedDate || "9999-12-31").slice(0, 10);
+      if (leftReceived !== rightReceived) return leftReceived.localeCompare(rightReceived);
+      return String(left.batchNo || "").localeCompare(String(right.batchNo || ""));
+    });
+  let remainingQty = Math.max(0, Number(qty || 0));
+  const plan = [];
+  for (const batch of candidates) {
+    if (remainingQty <= 0) break;
+    const issueQty = Math.min(Number(batch.stockQty || 0), remainingQty);
+    plan.push({
+      ...batch,
+      qty: issueQty,
+      unit: material.unit || "",
+    });
+    remainingQty -= issueQty;
+  }
+  return { plan, recommendedBatch: plan[0] || null, remainingQty, unit: material.unit || "" };
+}
+
+function formatExpiryDistance(days) {
+  if (days === null || days === undefined || Number.isNaN(days)) return "未设置";
+  if (days < 0) return `已过期 ${Math.abs(days)} 天`;
+  if (days === 0) return "今天到期";
+  return `${days} 天后到期`;
+}
+
+function buildFefoAdvice(selectedBatch, qty) {
+  if (!selectedBatch) {
+    return { tone: "", title: "未选择批次", text: "先选择一个批次，再查看 FEFO 推荐。", reasonRequired: false };
+  }
+  const selectedStatus = selectedBatch.batchStatus || getBatchStatus(selectedBatch);
+  const plan = buildLocalFefoPlan(selectedBatch.materialCode, qty);
+  const recommended = plan.recommendedBatch;
+  const unit = plan.unit || "";
+  const planText = plan.plan.length
+    ? plan.plan.map((item) => `${item.batchNo} ${item.qty}${unit}`).join(" + ")
+    : "暂无可用未过期批次";
+
+  if (selectedStatus === "已过期") {
+    return {
+      tone: "warn",
+      title: "当前批次已过期",
+      text: `如必须出库，需要填写原因。系统仍会记录本次强制出库。推荐拆分：${planText}`,
+      reasonRequired: true,
+    };
+  }
+
+  if (!recommended) {
+    return {
+      tone: "warn",
+      title: "没有可推荐批次",
+      text: "当前物料没有可用的未过期库存，请检查库存或改为入库。",
+      reasonRequired: false,
+    };
+  }
+
+  if (recommended.batchNo !== selectedBatch.batchNo) {
+    return {
+      tone: "warn",
+      title: `FEFO 建议先用 ${recommended.batchNo}`,
+      text: `当前选中批次不是最早过期批次。如仍要使用当前批次，请填写原因。推荐拆分：${planText}`,
+      reasonRequired: true,
+    };
+  }
+
+  return {
+    tone: "running",
+    title: "当前批次符合 FEFO",
+    text: `建议按最早过期优先出库。推荐拆分：${planText}${plan.remainingQty > 0 ? `，仍缺 ${plan.remainingQty}${unit}` : ""}`,
+    reasonRequired: false,
+  };
+}
+
+function renderFefoAdviceHtml(selectedBatch, qty) {
+  const advice = buildFefoAdvice(selectedBatch, qty);
+  return `
+    <div class="fefo-advice ${escapeHtml(advice.tone)}" data-reason-required="${advice.reasonRequired ? "1" : "0"}">
+      <div class="item-title">${escapeHtml(advice.title)}</div>
+      <div class="item-note">${escapeHtml(advice.text)}</div>
+    </div>
+  `;
 }
 
 function getSelectedMaterialItem() {
@@ -1092,6 +1224,7 @@ function renderMaterials() {
   const selectedBatch = getSelectedMaterial() || selectedBatches[0] || null;
   const selectedSummary = selectedMaterialItem ? getMaterialSummary(selectedMaterialItem.code) : null;
   const selectedUnit = materialUnitLabel(selectedMaterialItem);
+  const filteredMaterialItems = materialItems.filter((item) => matchesMaterialFilter(item, state.materialFilter));
   const batchCode = buildMaterialBatchCode(selectedBatch);
   const batchLink = buildMobileBatchLink(selectedBatch);
   const batchLabelLink = buildBatchLabelLink(selectedBatch);
@@ -1114,18 +1247,31 @@ function renderMaterials() {
           <div class="panel-head">
             <h2>物料档案</h2>
             <div class="panel-actions">
-              <span class="badge">${materialItems.length} 个物料</span>
+              <span class="badge">${filteredMaterialItems.length}/${materialItems.length} 个物料</span>
               <button class="ghost-btn slim-btn" type="button" id="new-material-item-btn">+ 新建</button>
             </div>
+          </div>
+          <div class="filter-row" id="material-filter-row">
+            ${materialFilterDefinitions
+              .map((item) => `<button class="ghost-btn slim-btn ${state.materialFilter === item.key ? "active-filter" : ""}" type="button" data-material-filter="${escapeHtml(item.key)}">${escapeHtml(item.label)}</button>`)
+              .join("")}
           </div>
           <div class="table">
             <div class="table-head material-master-grid">
               <div>料号</div><div>物料</div><div>规格</div><div>总库存</div><div>安全库存</div><div>最近到期</div><div>状态</div>
             </div>
             ${
-              materialItems
+              filteredMaterialItems
                 .map((item) => {
                   const summary = getMaterialSummary(item.code);
+                  const riskText = summary.lowStock
+                    ? "低库存"
+                    : Number(summary.expiredBatchCount || 0) > 0
+                      ? "有过期"
+                      : Number(summary.expiringSoonBatchCount || 0) > 0
+                        ? "即将过期"
+                        : escapeHtml(item.status || "启用");
+                  const riskClass = summary.lowStock || Number(summary.expiredBatchCount || 0) > 0 ? "warn" : Number(summary.expiringSoonBatchCount || 0) > 0 ? "pending" : "running";
                   return `
                     <button class="table-row material-master-grid clickable ${item.code === selectedMaterialItem?.code ? "active" : ""}" data-material-code="${escapeHtml(item.code)}" type="button">
                       <div>${escapeHtml(item.code)}</div>
@@ -1134,7 +1280,7 @@ function renderMaterials() {
                       <div><span class="status ${summary.lowStock ? "warn" : ""}">${summary.totalStockQty} ${escapeHtml(materialUnitLabel(item))}</span></div>
                       <div>${summary.safetyQty} ${escapeHtml(materialUnitLabel(item))}</div>
                       <div>${escapeHtml(summary.nearestExpiryDate || "-")}</div>
-                      <div><span class="status ${summary.lowStock ? "warn" : "running"}">${summary.lowStock ? "低库存" : escapeHtml(item.status || "启用")}</span></div>
+                      <div><span class="status ${riskClass}">${escapeHtml(riskText)}</span></div>
                     </button>
                   `;
                 })
@@ -1150,6 +1296,7 @@ function renderMaterials() {
           ${selectedBatches
             .map((item) => {
               const status = item.batchStatus || getBatchStatus(item);
+              const days = item.daysUntilExpiry ?? daysUntilExpiry(item.expiryDate);
               return `
                 <button class="table-row material-grid clickable ${materialKey(item) === materialKey(selectedBatch) ? "active" : ""}" data-material-key="${escapeHtml(materialKey(item))}" type="button">
                   <div>${escapeHtml(item.batchNo)}</div>
@@ -1157,7 +1304,7 @@ function renderMaterials() {
                   <div>${Number(item.initialQty || 0)} ${escapeHtml(selectedUnit)}</div>
                   <div>${escapeHtml(item.location || "-")}</div>
                   <div>${escapeHtml(String(item.receivedDate || "").slice(0, 10) || "-")}</div>
-                  <div>${escapeHtml(String(item.expiryDate || "").slice(0, 10) || "-")} / <span class="status ${status === "正常" ? "running" : status === "即将过期" ? "pending" : "warn"}">${escapeHtml(status)}</span></div>
+                  <div>${escapeHtml(String(item.expiryDate || "").slice(0, 10) || "-")} / ${escapeHtml(formatExpiryDistance(days))} / <span class="status ${batchStatusClass(status)}">${escapeHtml(status)}</span></div>
                 </button>
               `;
             })
@@ -1284,6 +1431,11 @@ function renderMaterials() {
                             <label>库位<input name="location" value="${escapeHtml(selectedBatch.location || "")}" required /></label>
                             <label>备注<input name="note" placeholder="采购到货、领料、退料、盘点调整" /></label>
                           </div>
+                          <div id="fefo-plan-preview">${renderFefoAdviceHtml(selectedBatch, 1)}</div>
+                          <label class="override-reason-field" id="fefo-override-field">
+                            不按 FEFO / 过期强制出库原因
+                            <input name="overrideReason" placeholder="例如：研发试料、客户指定、异常处理" />
+                          </label>
                           <div class="editor-actions">
                             <button class="primary-btn" type="submit">提交库存动作</button>
                           </div>
@@ -1323,6 +1475,13 @@ function renderMaterials() {
       state.selectedMaterialCode = row.getAttribute("data-material-code");
       const firstBatch = getMaterialBatches().find((item) => item.materialCode === state.selectedMaterialCode);
       state.selectedMaterialKey = materialKey(firstBatch);
+      renderMaterials();
+    });
+  });
+
+  document.querySelectorAll("[data-material-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.materialFilter = button.getAttribute("data-material-filter") || "all";
       renderMaterials();
     });
   });
@@ -1445,9 +1604,31 @@ function renderMaterials() {
 
   const movementForm = document.getElementById("material-movement-form");
   if (movementForm && selectedBatch) {
+    const refreshFefoPreview = () => {
+      const preview = document.getElementById("fefo-plan-preview");
+      const reasonField = document.getElementById("fefo-override-field");
+      const type = movementForm.elements.type.value;
+      const qty = Number(movementForm.elements.qty.value || 0);
+      if (type !== "out") {
+        preview.innerHTML = '<div class="fefo-advice"><div class="item-title">入库不需要 FEFO 推荐</div><div class="item-note">FEFO 只在生产领料出库时生效。</div></div>';
+        reasonField.classList.add("hidden");
+        return;
+      }
+      const advice = buildFefoAdvice(selectedBatch, qty);
+      preview.innerHTML = renderFefoAdviceHtml(selectedBatch, qty);
+      reasonField.classList.toggle("hidden", !advice.reasonRequired);
+    };
+    ["type", "qty"].forEach((name) => movementForm.elements[name].addEventListener("input", refreshFefoPreview));
+    refreshFefoPreview();
     movementForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formData = new FormData(movementForm);
+      const advice = buildFefoAdvice(selectedBatch, Number(formData.get("qty") || 0));
+      const overrideReason = String(formData.get("overrideReason") || "").trim();
+      if (formData.get("type") === "out" && advice.reasonRequired && !overrideReason) {
+        showToast("当前批次不符合 FEFO 或已过期，请填写原因");
+        return;
+      }
       try {
         const result = await api("/api/stock-movements", {
           method: "POST",
@@ -1458,6 +1639,7 @@ function renderMaterials() {
             qty: Number(formData.get("qty") || 0),
             location: formData.get("location"),
             note: formData.get("note"),
+            overrideReason,
             source: "admin",
           }),
         });

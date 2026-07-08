@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  buildFefoIssuePlan,
   createStore,
   getBatchExpiryStatus,
   getMaterialStockSummary,
@@ -38,6 +39,17 @@ async function createPuMaterial(store, overrides = {}) {
     operator: "测试管理员",
     ...overrides,
   });
+}
+
+function dateOnly(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function daysFromNow(days) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return dateOnly(date);
 }
 
 test("manager can create material items and duplicate codes are rejected", async () => {
@@ -268,5 +280,156 @@ test("old stock movement API path updates batches and keeps mobile scan payload 
     const state = await store.getState("manager");
     const summary = getMaterialStockSummary("RM-PU-001", state);
     assert.equal(summary.totalStockQty, 6);
+  });
+});
+
+test("FEFO plan recommends the earliest non-expired batch and splits when needed", () => {
+  const state = {
+    materialItems: [{ code: "RM-FEFO-001", name: "FEFO material", unit: "kg", safetyQty: 0 }],
+    materialBatches: [
+      { materialCode: "RM-FEFO-001", batchNo: "LATE", stockQty: 10, location: "A-02", receivedDate: "2099-01-02", expiryDate: "2099-03-01" },
+      { materialCode: "RM-FEFO-001", batchNo: "EARLY", stockQty: 6, location: "A-01", receivedDate: "2099-01-01", expiryDate: "2099-02-01" },
+      { materialCode: "RM-FEFO-001", batchNo: "EXPIRED", stockQty: 99, location: "A-03", receivedDate: "2025-01-01", expiryDate: "2025-01-31" },
+    ],
+  };
+  const plan = buildFefoIssuePlan("RM-FEFO-001", 9, state, { now: new Date("2026-07-08T00:00:00Z") });
+  assert.equal(plan.recommendedBatch.batchNo, "EARLY");
+  assert.deepEqual(plan.plan.map((item) => [item.batchNo, item.qty]), [
+    ["EARLY", 6],
+    ["LATE", 3],
+  ]);
+  assert.equal(plan.remainingQty, 0);
+  assert.equal(plan.isEnough, true);
+});
+
+test("material summary exposes low stock and batch risk counts", async () => {
+  await withTestStore(async (store) => {
+    await createPuMaterial(store, { safetyQty: 50 });
+    const expiredDate = daysFromNow(-1);
+    const soonDate = daysFromNow(7);
+    const normalDate = daysFromNow(90);
+    await store.createMaterialBatch({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-RISK-EXPIRED",
+      initialQty: 2,
+      location: "A-01",
+      receivedDate: daysFromNow(-30),
+      expiryDate: expiredDate,
+      operator: "tester",
+    });
+    await store.createMaterialBatch({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-RISK-SOON",
+      initialQty: 3,
+      location: "A-01",
+      receivedDate: daysFromNow(-5),
+      expiryDate: soonDate,
+      operator: "tester",
+    });
+    await store.createMaterialBatch({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-RISK-NORMAL",
+      initialQty: 4,
+      location: "A-01",
+      receivedDate: daysFromNow(-5),
+      expiryDate: normalDate,
+      operator: "tester",
+    });
+    const state = await store.getState("manager");
+    const summary = getMaterialStockSummary("RM-PU-001", state);
+    assert.equal(summary.totalStockQty, 9);
+    assert.equal(summary.lowStock, true);
+    assert.equal(summary.expiredBatchCount, 1);
+    assert.equal(summary.expiringSoonBatchCount, 1);
+  });
+});
+
+test("outbound movement rejects non-FEFO batch without reason and allows override reason", async () => {
+  await withTestStore(async (store) => {
+    await createPuMaterial(store);
+    await store.createMaterialBatch({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-FEFO-EARLY",
+      initialQty: 10,
+      location: "A-01",
+      receivedDate: "2099-01-01",
+      expiryDate: "2099-02-01",
+      operator: "tester",
+    });
+    await store.createMaterialBatch({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-FEFO-LATE",
+      initialQty: 10,
+      location: "A-02",
+      receivedDate: "2099-01-02",
+      expiryDate: "2099-03-01",
+      operator: "tester",
+    });
+
+    await assert.rejects(
+      () =>
+        store.createStockMovement({
+          materialCode: "RM-PU-001",
+          batchNo: "PU-FEFO-LATE",
+          type: "out",
+          qty: 2,
+          location: "A-02",
+          operator: "tester",
+        }),
+      /FEFO|PU-FEFO-EARLY/
+    );
+
+    const out = await store.createStockMovement({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-FEFO-LATE",
+      type: "out",
+      qty: 2,
+      location: "A-02",
+      note: "manual pick",
+      overrideReason: "customer specified",
+      operator: "tester",
+    });
+    assert.equal(out.movement.afterQty, 8);
+    assert.match(out.movement.note, /customer specified/);
+  });
+});
+
+test("expired batch requires override reason before outbound movement", async () => {
+  await withTestStore(async (store) => {
+    await createPuMaterial(store);
+    await store.createMaterialBatch({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-EXPIRED",
+      initialQty: 5,
+      location: "A-01",
+      receivedDate: "2025-01-01",
+      expiryDate: "2025-01-31",
+      operator: "tester",
+    });
+
+    await assert.rejects(
+      () =>
+        store.createStockMovement({
+          materialCode: "RM-PU-001",
+          batchNo: "PU-EXPIRED",
+          type: "out",
+          qty: 1,
+          location: "A-01",
+          operator: "tester",
+        }),
+      /已过期|过期/
+    );
+
+    const out = await store.createStockMovement({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-EXPIRED",
+      type: "out",
+      qty: 1,
+      location: "A-01",
+      overrideReason: "R&D sample test",
+      operator: "tester",
+    });
+    assert.equal(out.movement.afterQty, 4);
+    assert.match(out.movement.note, /R&D sample test/);
   });
 });
