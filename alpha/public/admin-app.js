@@ -40,6 +40,7 @@ const state = {
   selectedMaterialKey: "",
   sampleEditorMode: "edit",
   orderEditorMode: "edit",
+  materialEditorMode: "edit",
   orderFilter: "all",
   currentUser: null,
   data: null,
@@ -379,6 +380,7 @@ function getMaterialSummary(materialCode) {
 }
 
 function getSelectedMaterialItem() {
+  if (state.materialEditorMode === "create") return null;
   return getMaterialItems().find((item) => item.code === state.selectedMaterialCode) || getMaterialItems()[0] || null;
 }
 
@@ -495,13 +497,16 @@ function syncSelections() {
 
   const materialItems = getMaterialItems();
   const materialCodeExists = materialItems.some((item) => item.code === state.selectedMaterialCode);
-  if (!materialCodeExists) {
+  if (state.materialEditorMode === "create") {
+    state.selectedMaterialCode = "";
+    state.selectedMaterialKey = "";
+  } else if (!materialCodeExists) {
     state.selectedMaterialCode = materialItems[0]?.code || "";
   }
 
   const selectedBatches = getMaterialBatches().filter((item) => item.materialCode === state.selectedMaterialCode);
   const materialExists = selectedBatches.some((item) => materialKey(item) === state.selectedMaterialKey);
-  if (!materialExists) {
+  if (state.materialEditorMode !== "create" && !materialExists) {
     state.selectedMaterialKey = materialKey(selectedBatches[0]);
   }
 }
@@ -1108,7 +1113,10 @@ function renderMaterials() {
         <div class="detail-block">
           <div class="panel-head">
             <h2>物料档案</h2>
-            <span class="badge">${materialItems.length} 个物料</span>
+            <div class="panel-actions">
+              <span class="badge">${materialItems.length} 个物料</span>
+              <button class="ghost-btn slim-btn" type="button" id="new-material-item-btn">+ 新建</button>
+            </div>
           </div>
           <div class="table">
             <div class="table-head material-master-grid">
@@ -1195,11 +1203,20 @@ function renderMaterials() {
               <label>物料编号<input name="code" value="${escapeHtml(selectedMaterialItem?.code || "")}" placeholder="例如：RM-PU-001" required /></label>
               <label>物料名称<input name="name" value="${escapeHtml(selectedMaterialItem?.name || "")}" placeholder="例如：PU 原材料" required /></label>
               <label>规格<input name="spec" value="${escapeHtml(selectedMaterialItem?.spec || "")}" placeholder="例如：低温热塑" /></label>
-              <label>当前总库存数量（单位：${escapeHtml(selectedUnit)}）<input value="${escapeHtml(selectedSummary?.totalStockQty ?? 0)}" readonly /></label>
-              <label>计量单位<input name="unit" value="${escapeHtml(selectedUnit)}" readonly aria-readonly="true" required /></label>
+              <label>计量单位（只填单位，不填数量）<input name="unit" value="${escapeHtml(selectedUnit)}" list="material-unit-options" placeholder="例如：kg、张、片、桶、个" required /></label>
+              <label>当前总库存数量（单位：${escapeHtml(selectedUnit)}，只读）<input value="${escapeHtml(selectedSummary?.totalStockQty ?? 0)}" readonly /></label>
               <label>安全库存数量（单位：${escapeHtml(selectedUnit)}）<input name="safetyQty" type="number" min="0" step="1" value="${escapeHtml(selectedMaterialItem?.safetyQty ?? 0)}" required /></label>
               <label>默认库位<input name="defaultLocation" value="${escapeHtml(selectedMaterialItem?.defaultLocation || "")}" placeholder="例如：A-01" /></label>
             </div>
+            <datalist id="material-unit-options">
+              <option value="kg"></option>
+              <option value="张"></option>
+              <option value="片"></option>
+              <option value="桶"></option>
+              <option value="个"></option>
+              <option value="双"></option>
+              <option value="米"></option>
+            </datalist>
             <div class="editor-actions">
               <button class="primary-btn" type="submit">保存物料档案</button>
               <button class="ghost-btn" type="button" id="new-material-draft-btn">清空新建</button>
@@ -1302,6 +1319,7 @@ function renderMaterials() {
 
   document.querySelectorAll("[data-material-code]").forEach((row) => {
     row.addEventListener("click", () => {
+      state.materialEditorMode = "edit";
       state.selectedMaterialCode = row.getAttribute("data-material-code");
       const firstBatch = getMaterialBatches().find((item) => item.materialCode === state.selectedMaterialCode);
       state.selectedMaterialKey = materialKey(firstBatch);
@@ -1309,8 +1327,19 @@ function renderMaterials() {
     });
   });
 
+  const newMaterialItemButton = document.getElementById("new-material-item-btn");
+  if (newMaterialItemButton) {
+    newMaterialItemButton.addEventListener("click", () => {
+      state.materialEditorMode = "create";
+      state.selectedMaterialCode = "";
+      state.selectedMaterialKey = "";
+      renderMaterials();
+    });
+  }
+
   document.querySelectorAll("[data-material-key]").forEach((row) => {
     row.addEventListener("click", () => {
+      state.materialEditorMode = "edit";
       state.selectedMaterialKey = row.getAttribute("data-material-key");
       renderMaterials();
     });
@@ -1363,6 +1392,7 @@ function renderMaterials() {
         state.data = result.state;
         state.selectedMaterialCode = result.material.code;
         state.selectedMaterialKey = "";
+        state.materialEditorMode = "edit";
         syncSelections();
         renderAll();
         showToast(isUpdate ? "物料档案已更新" : "物料档案已创建");
@@ -1375,13 +1405,10 @@ function renderMaterials() {
   const newMaterialDraftButton = document.getElementById("new-material-draft-btn");
   if (newMaterialDraftButton && materialItemForm) {
     newMaterialDraftButton.addEventListener("click", () => {
-      materialItemForm.reset();
-      materialItemForm.elements.code.value = "";
-      materialItemForm.elements.name.value = "";
-      materialItemForm.elements.spec.value = "";
-      materialItemForm.elements.unit.value = "kg";
-      materialItemForm.elements.safetyQty.value = "0";
-      materialItemForm.elements.defaultLocation.value = "";
+      state.materialEditorMode = "create";
+      state.selectedMaterialCode = "";
+      state.selectedMaterialKey = "";
+      renderMaterials();
     });
   }
 
