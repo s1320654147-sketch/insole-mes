@@ -155,6 +155,21 @@ async function handleApi(request, response, url) {
     return true;
   }
 
+  if (url.pathname === "/api/material-items/save" && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const body = await readJson(request);
+    const materialCode = String(body.code || "").trim();
+    const state = await store.getState(user.role);
+    const exists = (state.materialItems || []).some((item) => item.code === materialCode);
+    const result = exists
+      ? await store.updateMaterialItem(materialCode, { ...body, operator: user.name })
+      : await store.createMaterialItem({ ...body, operator: user.name });
+    sendJson(response, exists ? 200 : 201, await withScopedState(result, user.role));
+    return true;
+  }
+
   if (url.pathname.startsWith("/api/material-items/") && request.method === "PUT") {
     const user = requireUser(request, response);
     if (!user) return true;

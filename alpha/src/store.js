@@ -236,6 +236,7 @@ function assertMaterialItemInput(material, existingItems = [], originalCode = ""
   if (!material.code) throw new Error("物料编号不能为空");
   if (!material.name) throw new Error("物料名称不能为空");
   if (!material.unit) throw new Error("单位不能为空");
+  if (/^\d+(\.\d+)?$/.test(material.unit)) throw new Error("计量单位不能是纯数字，请填写 kg、张、片等单位");
   if (!Number.isFinite(material.safetyQty) || material.safetyQty < 0) throw new Error("安全库存必须是非负数");
   const duplicated = existingItems.some((item) => item.code === material.code && item.code !== originalCode);
   if (duplicated) throw new Error("物料编号不能重复");

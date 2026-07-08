@@ -82,6 +82,22 @@ test("material items default to kg and can be edited after creation", async () =
   });
 });
 
+test("material item unit rejects pure numbers to avoid stock quantity mistakes", async () => {
+  await withTestStore(async (store) => {
+    await assert.rejects(
+      () =>
+        store.createMaterialItem({
+          code: "RM-BAD-UNIT",
+          name: "错误单位物料",
+          unit: "50",
+          safetyQty: 1,
+          operator: "测试管理员",
+        }),
+      /计量单位不能是纯数字/
+    );
+  });
+});
+
 test("material batches create inbound stock movement and derived total stock", async () => {
   await withTestStore(async (store) => {
     await createPuMaterial(store);

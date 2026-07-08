@@ -93,7 +93,12 @@ async function api(path, options = {}) {
   });
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json") ? await response.json() : { message: await response.text() };
-  if (!response.ok) throw new Error(payload.message || "请求失败");
+  if (!response.ok) {
+    if (path.startsWith("/api/") && /^not found$/i.test(String(payload.message || "").trim())) {
+      throw new Error("接口未加载，请先停止旧的 npm 服务，再重新运行 npm.cmd start");
+    }
+    throw new Error(payload.message || "请求失败");
+  }
   return payload;
 }
 
@@ -137,6 +142,15 @@ function normalizeStatus(status) {
 
 function formatShortDate(value) {
   return value ? String(value).slice(5, 10) : "-";
+}
+
+function isNumericText(value) {
+  return /^\d+(\.\d+)?$/.test(String(value || "").trim());
+}
+
+function materialUnitLabel(material) {
+  const unit = String(material?.unit || "kg").trim();
+  return unit && !isNumericText(unit) ? unit : "kg";
 }
 
 function percent(doneQty, plannedQty) {
@@ -1072,6 +1086,7 @@ function renderMaterials() {
   const selectedBatches = selectedMaterialItem ? materialBatches.filter((item) => item.materialCode === selectedMaterialItem.code) : [];
   const selectedBatch = getSelectedMaterial() || selectedBatches[0] || null;
   const selectedSummary = selectedMaterialItem ? getMaterialSummary(selectedMaterialItem.code) : null;
+  const selectedUnit = materialUnitLabel(selectedMaterialItem);
   const batchCode = buildMaterialBatchCode(selectedBatch);
   const batchLink = buildMobileBatchLink(selectedBatch);
   const batchLabelLink = buildBatchLabelLink(selectedBatch);
@@ -1108,8 +1123,8 @@ function renderMaterials() {
                       <div>${escapeHtml(item.code)}</div>
                       <div>${escapeHtml(item.name)}</div>
                       <div>${escapeHtml(item.spec || "-")}</div>
-                      <div><span class="status ${summary.lowStock ? "warn" : ""}">${summary.totalStockQty} ${escapeHtml(item.unit)}</span></div>
-                      <div>${summary.safetyQty} ${escapeHtml(item.unit)}</div>
+                      <div><span class="status ${summary.lowStock ? "warn" : ""}">${summary.totalStockQty} ${escapeHtml(materialUnitLabel(item))}</span></div>
+                      <div>${summary.safetyQty} ${escapeHtml(materialUnitLabel(item))}</div>
                       <div>${escapeHtml(summary.nearestExpiryDate || "-")}</div>
                       <div><span class="status ${summary.lowStock ? "warn" : "running"}">${summary.lowStock ? "低库存" : escapeHtml(item.status || "启用")}</span></div>
                     </button>
@@ -1130,8 +1145,8 @@ function renderMaterials() {
               return `
                 <button class="table-row material-grid clickable ${materialKey(item) === materialKey(selectedBatch) ? "active" : ""}" data-material-key="${escapeHtml(materialKey(item))}" type="button">
                   <div>${escapeHtml(item.batchNo)}</div>
-                  <div><span class="status ${status === "已过期" || status === "已用完" ? "warn" : ""}">${Number(item.stockQty || 0)} ${escapeHtml(selectedMaterialItem?.unit || "")}</span></div>
-                  <div>${Number(item.initialQty || 0)} ${escapeHtml(selectedMaterialItem?.unit || "")}</div>
+                  <div><span class="status ${status === "已过期" || status === "已用完" ? "warn" : ""}">${Number(item.stockQty || 0)} ${escapeHtml(selectedUnit)}</span></div>
+                  <div>${Number(item.initialQty || 0)} ${escapeHtml(selectedUnit)}</div>
                   <div>${escapeHtml(item.location || "-")}</div>
                   <div>${escapeHtml(String(item.receivedDate || "").slice(0, 10) || "-")}</div>
                   <div>${escapeHtml(String(item.expiryDate || "").slice(0, 10) || "-")} / <span class="status ${status === "正常" ? "running" : status === "即将过期" ? "pending" : "warn"}">${escapeHtml(status)}</span></div>
@@ -1154,7 +1169,7 @@ function renderMaterials() {
                       (item) => `
                         <div class="list-item">
                           <div class="item-top">
-                            <div class="item-title">${item.type === "out" ? "出库" : item.type === "adjust" ? "调整" : "入库"} ${escapeHtml(item.qty)}${selectedMaterialItem ? escapeHtml(selectedMaterialItem.unit) : ""}</div>
+                            <div class="item-title">${item.type === "out" ? "出库" : item.type === "adjust" ? "调整" : "入库"} ${escapeHtml(item.qty)}${selectedMaterialItem ? escapeHtml(selectedUnit) : ""}</div>
                             <span class="status ${item.type === "out" ? "warn" : "pending"}">${item.type === "out" ? "出库" : "入库"}</span>
                           </div>
                           <div class="item-meta">${escapeHtml(item.batchNo)} / ${escapeHtml(item.location || "-")} / ${escapeHtml(item.operator || "-")}</div>
@@ -1180,8 +1195,9 @@ function renderMaterials() {
               <label>物料编号<input name="code" value="${escapeHtml(selectedMaterialItem?.code || "")}" placeholder="例如：RM-PU-001" required /></label>
               <label>物料名称<input name="name" value="${escapeHtml(selectedMaterialItem?.name || "")}" placeholder="例如：PU 原材料" required /></label>
               <label>规格<input name="spec" value="${escapeHtml(selectedMaterialItem?.spec || "")}" placeholder="例如：低温热塑" /></label>
-              <label>单位<input name="unit" value="${escapeHtml(selectedMaterialItem?.unit || "kg")}" placeholder="默认 kg" required /></label>
-              <label>安全库存<input name="safetyQty" type="number" min="0" step="1" value="${escapeHtml(selectedMaterialItem?.safetyQty ?? 0)}" required /></label>
+              <label>当前总库存数量（单位：${escapeHtml(selectedUnit)}）<input value="${escapeHtml(selectedSummary?.totalStockQty ?? 0)}" readonly /></label>
+              <label>计量单位<input name="unit" value="${escapeHtml(selectedUnit)}" readonly aria-readonly="true" required /></label>
+              <label>安全库存数量（单位：${escapeHtml(selectedUnit)}）<input name="safetyQty" type="number" min="0" step="1" value="${escapeHtml(selectedMaterialItem?.safetyQty ?? 0)}" required /></label>
               <label>默认库位<input name="defaultLocation" value="${escapeHtml(selectedMaterialItem?.defaultLocation || "")}" placeholder="例如：A-01" /></label>
             </div>
             <div class="editor-actions">
@@ -1195,7 +1211,7 @@ function renderMaterials() {
           <div class="panel-head">
             <h2>新建批次 / 入库</h2>
             <span class="badge ${selectedSummary?.lowStock ? "warn" : ""}">
-              ${selectedSummary ? `${selectedSummary.totalStockQty} ${escapeHtml(selectedMaterialItem?.unit || "")}` : "未选择物料"}
+              ${selectedSummary ? `${selectedSummary.totalStockQty} ${escapeHtml(selectedUnit)}` : "未选择物料"}
             </span>
           </div>
           ${
@@ -1211,7 +1227,7 @@ function renderMaterials() {
                         </select>
                       </label>
                       <label>批次号<input name="batchNo" placeholder="例如：PU-202607-001" required /></label>
-                      <label>入库数量<input name="initialQty" type="number" min="1" step="1" value="1" required /></label>
+                      <label>入库数量（单位：${escapeHtml(selectedUnit)}）<input name="initialQty" type="number" min="1" step="1" value="1" required /></label>
                       <label>库位<input name="location" value="${escapeHtml(selectedMaterialItem.defaultLocation || "")}" required /></label>
                       <label>来料日期<input name="receivedDate" type="date" value="${todayValue}" required /></label>
                       <label>保质期截止日期<input name="expiryDate" type="date" value="${defaultExpiryValue}" required /></label>
@@ -1247,7 +1263,7 @@ function renderMaterials() {
                                 <option value="out">出库</option>
                               </select>
                             </label>
-                            <label>数量<input name="qty" type="number" min="1" step="1" value="1" required /></label>
+                            <label>出入库数量（单位：${escapeHtml(selectedUnit)}）<input name="qty" type="number" min="1" step="1" value="1" required /></label>
                             <label>库位<input name="location" value="${escapeHtml(selectedBatch.location || "")}" required /></label>
                             <label>备注<input name="note" placeholder="采购到货、领料、退料、盘点调整" /></label>
                           </div>
@@ -1340,9 +1356,10 @@ function renderMaterials() {
         defaultLocation: formData.get("defaultLocation"),
       };
       try {
-        const result = isUpdate
-          ? await api(`/api/material-items/${encodeURIComponent(code)}`, { method: "PUT", body: JSON.stringify(payload) })
-          : await api("/api/material-items", { method: "POST", body: JSON.stringify(payload) });
+        if (isNumericText(payload.unit)) {
+          throw new Error("计量单位请填 kg、张、片等文字；库存数量在下方出入库里调整");
+        }
+        const result = await api("/api/material-items/save", { method: "POST", body: JSON.stringify(payload) });
         state.data = result.state;
         state.selectedMaterialCode = result.material.code;
         state.selectedMaterialKey = "";
