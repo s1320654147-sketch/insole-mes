@@ -1161,20 +1161,21 @@ function renderMaterials() {
       <section class="detail-stack">
         <div class="detail-block">
           <div class="panel-head">
-            <h2>新建物料</h2>
+            <h2>物料档案维护</h2>
             <span class="badge">档案</span>
           </div>
           <form class="editor-form" id="material-item-form">
             <div class="editor-grid two">
-              <label>物料编号<input name="code" placeholder="例如：RM-PU-001" required /></label>
-              <label>物料名称<input name="name" placeholder="例如：PU 原材料" required /></label>
-              <label>规格<input name="spec" placeholder="例如：低温热塑" /></label>
-              <label>单位<input name="unit" placeholder="例如：kg" required /></label>
-              <label>安全库存<input name="safetyQty" type="number" min="0" step="1" value="0" required /></label>
-              <label>默认库位<input name="defaultLocation" placeholder="例如：A-01" /></label>
+              <label>物料编号<input name="code" value="${escapeHtml(selectedMaterialItem?.code || "")}" placeholder="例如：RM-PU-001" required /></label>
+              <label>物料名称<input name="name" value="${escapeHtml(selectedMaterialItem?.name || "")}" placeholder="例如：PU 原材料" required /></label>
+              <label>规格<input name="spec" value="${escapeHtml(selectedMaterialItem?.spec || "")}" placeholder="例如：低温热塑" /></label>
+              <label>单位<input name="unit" value="${escapeHtml(selectedMaterialItem?.unit || "kg")}" placeholder="默认 kg" required /></label>
+              <label>安全库存<input name="safetyQty" type="number" min="0" step="1" value="${escapeHtml(selectedMaterialItem?.safetyQty ?? 0)}" required /></label>
+              <label>默认库位<input name="defaultLocation" value="${escapeHtml(selectedMaterialItem?.defaultLocation || "")}" placeholder="例如：A-01" /></label>
             </div>
             <div class="editor-actions">
               <button class="primary-btn" type="submit">保存物料档案</button>
+              <button class="ghost-btn" type="button" id="new-material-draft-btn">清空新建</button>
             </div>
           </form>
         </div>
@@ -1317,27 +1318,42 @@ function renderMaterials() {
     materialItemForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formData = new FormData(materialItemForm);
+      const code = String(formData.get("code") || "").trim();
+      const isUpdate = getMaterialItems().some((item) => item.code === code);
+      const payload = {
+        code,
+        name: formData.get("name"),
+        spec: formData.get("spec"),
+        unit: formData.get("unit") || "kg",
+        safetyQty: Number(formData.get("safetyQty") || 0),
+        defaultLocation: formData.get("defaultLocation"),
+      };
       try {
-        const result = await api("/api/material-items", {
-          method: "POST",
-          body: JSON.stringify({
-            code: formData.get("code"),
-            name: formData.get("name"),
-            spec: formData.get("spec"),
-            unit: formData.get("unit"),
-            safetyQty: Number(formData.get("safetyQty") || 0),
-            defaultLocation: formData.get("defaultLocation"),
-          }),
-        });
+        const result = isUpdate
+          ? await api(`/api/material-items/${encodeURIComponent(code)}`, { method: "PUT", body: JSON.stringify(payload) })
+          : await api("/api/material-items", { method: "POST", body: JSON.stringify(payload) });
         state.data = result.state;
         state.selectedMaterialCode = result.material.code;
         state.selectedMaterialKey = "";
         syncSelections();
         renderAll();
-        showToast("物料档案已创建");
+        showToast(isUpdate ? "物料档案已更新" : "物料档案已创建");
       } catch (error) {
         showToast(error.message);
       }
+    });
+  }
+
+  const newMaterialDraftButton = document.getElementById("new-material-draft-btn");
+  if (newMaterialDraftButton && materialItemForm) {
+    newMaterialDraftButton.addEventListener("click", () => {
+      materialItemForm.reset();
+      materialItemForm.elements.code.value = "";
+      materialItemForm.elements.name.value = "";
+      materialItemForm.elements.spec.value = "";
+      materialItemForm.elements.unit.value = "kg";
+      materialItemForm.elements.safetyQty.value = "0";
+      materialItemForm.elements.defaultLocation.value = "";
     });
   }
 

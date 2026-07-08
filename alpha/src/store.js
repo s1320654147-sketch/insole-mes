@@ -224,7 +224,7 @@ function normalizeMaterialItemInput(input = {}, fallback = {}) {
     code: String(input.code || fallback.code || "").trim(),
     name: String(input.name || fallback.name || "").trim(),
     spec: String(input.spec ?? fallback.spec ?? "").trim(),
-    unit: String(input.unit || fallback.unit || "").trim(),
+    unit: String(input.unit || fallback.unit || "kg").trim(),
     safetyQty: Number(input.safetyQty ?? fallback.safetyQty ?? 0),
     defaultLocation: String(input.defaultLocation || fallback.defaultLocation || fallback.location || "").trim(),
     supplier: String(input.supplier || fallback.supplier || "").trim(),
@@ -645,6 +645,27 @@ async function createFileStore(rootDir) {
       await writeState(state);
       return { material, state: serializePublicState(state) };
     },
+    async updateMaterialItem(materialCode, input) {
+      const state = await readState();
+      const existing = state.materialItems.find((item) => item.code === materialCode);
+      if (!existing) throw new Error("物料档案不存在");
+      const next = {
+        ...existing,
+        ...normalizeMaterialItemInput({ ...input, code: materialCode }, existing),
+        updatedAt: new Date().toISOString(),
+      };
+      assertMaterialItemInput(next, state.materialItems, materialCode);
+      Object.assign(existing, next);
+      state.activities.unshift({
+        id: makeId("act"),
+        title: `${existing.code} 物料已更新`,
+        meta: `${input.operator} · 刚刚`,
+        note: `${existing.name} / ${existing.unit} / 安全库存 ${existing.safetyQty}${existing.unit}`,
+        createdAt: existing.updatedAt,
+      });
+      await writeState(state);
+      return { material: existing, state: serializePublicState(state) };
+    },
     async createMaterialBatch(input) {
       const state = await readState();
       const material = state.materialItems.find((item) => item.code === input.materialCode);
@@ -930,6 +951,37 @@ async function createPostgresStore() {
         material.createdAt,
       ]);
       return { material, state: serializePublicState(await readPostgresState(pool)) };
+    },
+    async updateMaterialItem(materialCode, input) {
+      const existing = await pool.query(
+        'select code, name, spec, unit, safety_qty as "safetyQty", default_location as "defaultLocation", supplier, status, created_at as "createdAt", updated_at as "updatedAt" from material_items where code=$1 limit 1',
+        [materialCode]
+      );
+      const current = existing.rows[0];
+      if (!current) throw new Error("物料档案不存在");
+      const state = await readPostgresState(pool);
+      const next = {
+        ...current,
+        ...normalizeMaterialItemInput({ ...input, code: materialCode }, current),
+        updatedAt: new Date().toISOString(),
+      };
+      assertMaterialItemInput(next, state.materialItems, materialCode);
+      await pool.query(
+        "update material_items set name=$1, spec=$2, unit=$3, safety_qty=$4, default_location=$5, supplier=$6, status=$7, updated_at=$8 where code=$9",
+        [next.name, next.spec, next.unit, next.safetyQty, next.defaultLocation, next.supplier, next.status, next.updatedAt, materialCode]
+      );
+      await pool.query(
+        "update materials set name=$1, spec=$2, unit=$3, safety_qty=$4 where code=$5",
+        [next.name, next.spec, next.unit, next.safetyQty, materialCode]
+      );
+      await pool.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
+        makeId("act"),
+        `${materialCode} 物料已更新`,
+        `${input.operator} · 刚刚`,
+        `${next.name} / ${next.unit} / 安全库存 ${next.safetyQty}${next.unit}`,
+        next.updatedAt,
+      ]);
+      return { material: next, state: serializePublicState(await readPostgresState(pool)) };
     },
     async createMaterialBatch(input) {
       const client = await pool.connect();

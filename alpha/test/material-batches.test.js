@@ -44,6 +44,7 @@ test("manager can create material items and duplicate codes are rejected", async
   await withTestStore(async (store) => {
     const created = await createPuMaterial(store);
     assert.equal(created.material.code, "RM-PU-001");
+    assert.equal(created.material.unit, "kg");
     assert.equal(created.material.status, "启用");
     assert.ok(created.state.materialItems.some((item) => item.code === "RM-PU-001"));
 
@@ -51,6 +52,33 @@ test("manager can create material items and duplicate codes are rejected", async
       () => createPuMaterial(store, { name: "重复 PU" }),
       /物料编号不能重复/
     );
+  });
+});
+
+test("material items default to kg and can be edited after creation", async () => {
+  await withTestStore(async (store) => {
+    const created = await store.createMaterialItem({
+      code: "RM-EDIT-001",
+      name: "待编辑物料",
+      safetyQty: 1,
+      operator: "测试管理员",
+    });
+    assert.equal(created.material.unit, "kg");
+
+    const updated = await store.updateMaterialItem("RM-EDIT-001", {
+      name: "已编辑物料",
+      spec: "新版规格",
+      unit: "kg",
+      safetyQty: 5,
+      defaultLocation: "A-09",
+      operator: "测试管理员",
+    });
+    assert.equal(updated.material.name, "已编辑物料");
+    assert.equal(updated.material.spec, "新版规格");
+    assert.equal(updated.material.safetyQty, 5);
+    assert.equal(updated.material.defaultLocation, "A-09");
+    const state = await store.getState("manager");
+    assert.equal(state.materialItems.find((item) => item.code === "RM-EDIT-001").unit, "kg");
   });
 });
 

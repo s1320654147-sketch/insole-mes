@@ -155,6 +155,17 @@ async function handleApi(request, response, url) {
     return true;
   }
 
+  if (url.pathname.startsWith("/api/material-items/") && request.method === "PUT") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const body = await readJson(request);
+    const materialCode = decodeURIComponent(url.pathname.slice("/api/material-items/".length));
+    const result = await store.updateMaterialItem(materialCode, { ...body, operator: user.name });
+    sendJson(response, 200, await withScopedState(result, user.role));
+    return true;
+  }
+
   if (url.pathname === "/api/material-batches" && request.method === "GET") {
     const user = requireUser(request, response);
     if (!user) return true;
