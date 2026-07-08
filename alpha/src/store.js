@@ -1044,11 +1044,16 @@ async function createPostgresStore() {
         await client.query("begin");
         const movementInput = normalizeStockMovementInput(input);
         const result = await client.query(
-          "select b.*, i.name, i.spec, i.unit, i.safety_qty from material_batches b left join material_items i on i.code=b.material_code where b.material_code=$1 and b.batch_no=$2 for update",
+          "select * from material_batches where material_code=$1 and batch_no=$2 for update",
           [movementInput.materialCode, movementInput.batchNo]
         );
         const batch = result.rows[0];
         if (!batch) throw new Error("物料批次不存在");
+        const materialResult = await client.query(
+          "select name, spec, unit, safety_qty from material_items where code=$1 limit 1",
+          [movementInput.materialCode]
+        );
+        const material = materialResult.rows[0] || {};
         assertStockMovementInput(movementInput, batch.stock_qty);
         const qty = movementInput.qty;
         const sign = movementInput.type === "out" ? -1 : 1;
@@ -1077,18 +1082,18 @@ async function createPostgresStore() {
         );
         await client.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
           makeId("act"),
-          `${batch.name || movement.materialCode} ${movement.type === "out" ? "出库" : "入库"}`,
+          `${material.name || movement.materialCode} ${movement.type === "out" ? "出库" : "入库"}`,
           `${input.operator} · 刚刚`,
-          `${movement.batchNo} · ${qty}${batch.unit || ""} · ${movement.location}`,
+          `${movement.batchNo} · ${qty}${material.unit || ""} · ${movement.location}`,
           movement.createdAt,
         ]);
         const totalResult = await client.query("select coalesce(sum(stock_qty),0)::numeric as total from material_batches where material_code=$1", [movementInput.materialCode]);
         const totalStockQty = Number(totalResult.rows[0].total || 0);
-        if (totalStockQty < Number(batch.safety_qty || 0)) {
+        if (totalStockQty < Number(material.safety_qty || 0)) {
           await client.query("insert into alerts(id,title,text,severity,status,created_at) values($1,$2,$3,$4,$5,$6)", [
             makeId("al"),
-            `${batch.name || movement.materialCode} 库存不足`,
-            `${movementInput.materialCode} 当前 ${totalStockQty}${batch.unit || ""}，低于安全库存 ${batch.safety_qty}${batch.unit || ""}。`,
+            `${material.name || movement.materialCode} 库存不足`,
+            `${movementInput.materialCode} 当前 ${totalStockQty}${material.unit || ""}，低于安全库存 ${material.safety_qty || 0}${material.unit || ""}。`,
             "high",
             "open",
             movement.createdAt,
