@@ -433,3 +433,68 @@ test("expired batch requires override reason before outbound movement", async ()
     assert.match(out.movement.note, /R&D sample test/);
   });
 });
+
+test("stock movement correction keeps original row and reverses inventory once", async () => {
+  await withTestStore(async (store) => {
+    await createPuMaterial(store);
+    const created = await store.createMaterialBatch({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-CORRECT-001",
+      initialQty: 20,
+      location: "A-01",
+      receivedDate: daysFromNow(-1),
+      expiryDate: daysFromNow(60),
+      operator: "tester",
+    });
+
+    const correction = await store.correctStockMovement(created.movement.id, {
+      correctionReason: "wrong inbound quantity",
+      operator: "manager",
+    });
+    assert.equal(correction.movement.type, "out");
+    assert.equal(correction.movement.qty, 20);
+    assert.equal(correction.movement.correctionOfMovementId, created.movement.id);
+    assert.equal(correction.original.correctedByMovementId, correction.movement.id);
+    assert.equal(correction.state.materialBatches.find((item) => item.batchNo === "PU-CORRECT-001").stockQty, 0);
+
+    await assert.rejects(
+      () => store.correctStockMovement(created.movement.id, { correctionReason: "repeat", operator: "manager" }),
+      /已经冲正|重复/
+    );
+  });
+});
+
+test("outbound correction adds stock back and refuses blank reason", async () => {
+  await withTestStore(async (store) => {
+    await createPuMaterial(store);
+    await store.createMaterialBatch({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-CORRECT-002",
+      initialQty: 20,
+      location: "A-01",
+      receivedDate: daysFromNow(-1),
+      expiryDate: daysFromNow(60),
+      operator: "tester",
+    });
+    const out = await store.createStockMovement({
+      materialCode: "RM-PU-001",
+      batchNo: "PU-CORRECT-002",
+      type: "out",
+      qty: 6,
+      location: "A-01",
+      operator: "tester",
+    });
+
+    await assert.rejects(
+      () => store.correctStockMovement(out.movement.id, { correctionReason: "", operator: "manager" }),
+      /冲正原因/
+    );
+
+    const correction = await store.correctStockMovement(out.movement.id, {
+      correctionReason: "wrong outbound quantity",
+      operator: "manager",
+    });
+    assert.equal(correction.movement.type, "in");
+    assert.equal(correction.state.materialBatches.find((item) => item.batchNo === "PU-CORRECT-002").stockQty, 20);
+  });
+});

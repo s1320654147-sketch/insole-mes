@@ -39,6 +39,7 @@ input,
 select,
 textarea {
   font: inherit;
+  font-size: 16px;
 }
 
 h1,
@@ -78,7 +79,7 @@ h2 {
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .brand-line {
@@ -91,12 +92,13 @@ h2 {
 .mobile-form select,
 .mobile-form textarea {
   width: 100%;
-  min-height: 44px;
+  min-height: 48px;
   padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
   color: var(--text);
+  font-size: 16px;
 }
 
 .mobile-form textarea {
@@ -126,7 +128,7 @@ h2 {
 
 .eyebrow {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .header-actions {
@@ -158,7 +160,7 @@ h2 {
 .user-pill {
   border-radius: 999px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .mobile-main {
@@ -174,7 +176,7 @@ h2 {
   border-radius: 8px;
   background: #eff6ff;
   color: #1e3a8a;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.5;
 }
 
@@ -199,11 +201,12 @@ h2 {
 .action-button,
 .submit-button,
 .secondary-submit {
-  min-height: 46px;
+  min-height: 50px;
   border: 0;
   border-radius: 8px;
   cursor: pointer;
   font-weight: 700;
+  font-size: 16px;
 }
 
 .action-button {
@@ -249,14 +252,14 @@ h2 {
 }
 
 .summary-value {
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 800;
 }
 
 .summary-label {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .section-head {
@@ -313,7 +316,7 @@ h2 {
 .task-footer,
 .empty-state {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .status {
@@ -359,13 +362,15 @@ h2 {
 .workflow-sheet {
   position: fixed;
   right: 50%;
-  bottom: calc(64px + env(safe-area-inset-bottom, 0px));
-  z-index: 9;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 8px);
+  z-index: 30;
   width: min(calc(100% - 16px), 520px);
-  max-height: calc(100dvh - 250px);
+  max-height: calc(100dvh - 80px - env(safe-area-inset-bottom, 0px));
   margin: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   transform: translate(50%, calc(100% + 90px));
   box-shadow: 0 -12px 30px rgba(15, 23, 42, 0.18);
   visibility: hidden;
@@ -379,7 +384,7 @@ h2 {
 
 .workflow-sheet-head {
   position: sticky;
-  top: -14px;
+  top: -1px;
   z-index: 2;
   display: flex;
   align-items: center;
@@ -398,7 +403,7 @@ h2 {
 
 .workflow-sheet-head span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .sheet-close {
@@ -418,7 +423,7 @@ h2 {
 .sheet-backdrop {
   position: fixed;
   inset: 0 0 calc(64px + env(safe-area-inset-bottom, 0px));
-  z-index: 7;
+  z-index: 20;
   border: 0;
   background: rgba(15, 23, 42, 0.3);
 }
@@ -561,7 +566,7 @@ body.sheet-open {
   border: 1px dashed var(--border);
   background: #fff;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .scan-preview {
@@ -645,6 +650,7 @@ body.sheet-open {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  font-size: 16px;
 }
 
 .bottom-item.active {
@@ -657,7 +663,7 @@ body.sheet-open {
   position: fixed;
   right: 16px;
   bottom: 88px;
-  z-index: 7;
+  z-index: 40;
   transform: translateY(16px);
   opacity: 0;
   padding: 10px 14px;
@@ -690,7 +696,7 @@ body.sheet-open {
 
   .action-button {
     padding: 0 6px;
-    font-size: 12px;
+    font-size: 15px;
   }
 
   .summary-strip > div {

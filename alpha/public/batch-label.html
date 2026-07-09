@@ -143,11 +143,20 @@
         border-radius: 8px;
       }
       @media print {
+        @page { size: 80mm 60mm; margin: 4mm; }
         body { background: #fff; padding: 0; }
         .topbar, .warn, .actions, .tips-card { display: none !important; }
         .page { width: 100%; }
-        .grid { grid-template-columns: 1fr 1fr; }
-        .card { border: 1px solid #bbb; }
+        .grid { grid-template-columns: 1fr; gap: 6px; }
+        .card { border: 1px solid #111; padding: 8px; gap: 8px; }
+        .meta-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+        .meta-item { padding: 6px; }
+        .meta-label { margin-bottom: 2px; font-size: 10px; }
+        .meta-value { font-size: 12px; }
+        .code-block { padding: 6px; font-size: 10px; }
+        .qr-wrap { min-height: 0; padding: 6px; border: 0; }
+        .qr-wrap svg { width: 34mm; }
+        p { display: none; }
       }
       @media (max-width: 760px) {
         body { padding: 14px; }
@@ -212,13 +221,20 @@
       const materialCode = parts[1] || '-';
       const batchNo = parts[2] || '-';
       const batchLocation = parts.slice(3).join('|') || '-';
+      const materialName = params.get('materialName') || '-';
+      const stockQty = params.get('stockQty') || '-';
+      const unit = params.get('unit') || '';
+      const expiryDate = params.get('expiryDate') || '-';
       const mobileLink = `${window.location.origin}/mobile.html?batch=${encodeURIComponent(batch)}`;
 
       const metaItems = [
+        ['物料名称', materialName],
         ['料号', materialCode],
         ['批次', batchNo],
         ['库位', batchLocation],
-        ['标签用途', '原材料收发 / 批次追溯'],
+        ['当前库存', `${stockQty}${unit}`],
+        ['保质期', expiryDate],
+        ['标签用途', '原材料收发'],
       ];
 
       document.getElementById('meta-grid').innerHTML = metaItems.map(([label, value]) => `
@@ -284,6 +300,10 @@
       document.getElementById('print-btn').addEventListener('click', () => {
         window.print();
       });
+
+      if (params.get('print') === '1') {
+        window.setTimeout(() => window.print(), 500);
+      }
     </script>
   </body>
 </html>

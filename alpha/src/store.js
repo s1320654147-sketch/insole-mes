@@ -176,6 +176,7 @@ function normalizeStockMovementInput(input, fallback = {}) {
     location: String(input.location || fallback.location || "").trim(),
     note: String(input.note || fallback.note || "").trim(),
     overrideReason: String(input.overrideReason || input.forceReason || fallback.overrideReason || fallback.forceReason || "").trim(),
+    correctionReason: String(input.correctionReason || fallback.correctionReason || "").trim(),
   };
 }
 
@@ -185,6 +186,22 @@ function assertStockMovementInput(movement, availableQty = Number.POSITIVE_INFIN
   if (!Number.isFinite(movement.qty) || movement.qty <= 0) throw new Error("出入库数量必须大于 0");
   if (movement.type === "out" && movement.qty > Number(availableQty || 0)) {
     throw new Error("出库数量不能大于当前库存");
+  }
+}
+
+function movementTypeLabel(type) {
+  return type === "out" ? "出库" : "入库";
+}
+
+function assertCorrectionInput(original, batch, reason) {
+  if (!original) throw new Error("原始出入库流水不存在");
+  if (original.correctedByMovementId) throw new Error("这条流水已经冲正，不能重复冲正");
+  if (original.correctionOfMovementId) throw new Error("冲正流水不能再次冲正");
+  if (!["in", "out"].includes(original.type)) throw new Error("当前只支持入库 / 出库流水冲正");
+  if (!String(reason || "").trim()) throw new Error("冲正原因不能为空");
+  if (!batch) throw new Error("物料批次不存在");
+  if (original.type === "in" && Number(original.qty || 0) > Number(batch.stockQty || 0)) {
+    throw new Error("冲正后库存会变负，请先核对当前库存");
   }
 }
 
@@ -859,6 +876,51 @@ async function createFileStore(rootDir) {
       await writeState(state);
       return { movement, state: serializePublicState(state) };
     },
+    async correctStockMovement(movementId, input = {}) {
+      const state = await readState();
+      const original = state.stockMovements.find((item) => item.id === movementId);
+      const batch = original ? state.materialBatches.find((item) => item.materialCode === original.materialCode && item.batchNo === original.batchNo) : null;
+      const reason = String(input.correctionReason || input.reason || "").trim();
+      assertCorrectionInput(original, batch, reason);
+      const material = state.materialItems.find((item) => item.code === original.materialCode) || {};
+      const type = original.type === "in" ? "out" : "in";
+      const qty = Number(original.qty || 0);
+      const beforeQty = Number(batch.stockQty || 0);
+      const afterQty = original.type === "in" ? beforeQty - qty : beforeQty + qty;
+      const createdAt = new Date().toISOString();
+      batch.stockQty = afterQty;
+      batch.updatedAt = createdAt;
+      const correction = {
+        id: makeId("stk"),
+        materialCode: original.materialCode,
+        batchNo: original.batchNo,
+        type,
+        qty,
+        location: original.location || batch.location,
+        note: `冲正 ${original.id}：${reason}`,
+        operator: input.operator,
+        source: "correction",
+        beforeQty,
+        afterQty,
+        materialBatchId: original.materialBatchId || batch.id,
+        correctionOfMovementId: original.id,
+        correctionReason: reason,
+        createdAt,
+      };
+      original.correctedByMovementId = correction.id;
+      original.correctedAt = createdAt;
+      original.correctionReason = reason;
+      state.stockMovements.unshift(correction);
+      state.activities.unshift({
+        id: makeId("act"),
+        title: `${material.name || correction.materialCode} ${movementTypeLabel(original.type)}已冲正`,
+        meta: `${input.operator} · 刚刚`,
+        note: `${correction.batchNo} · ${qty}${material.unit || ""} · 原流水 ${original.id}`,
+        createdAt,
+      });
+      await writeState(state);
+      return { movement: correction, original, state: serializePublicState(state) };
+    },
   };
 }
 
@@ -1233,6 +1295,104 @@ async function createPostgresStore() {
         client.release();
       }
     },
+    async correctStockMovement(movementId, input = {}) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const movementResult = await client.query(
+          'select id, material_code as "materialCode", batch_no as "batchNo", type, qty, location, note, operator, source, before_qty as "beforeQty", after_qty as "afterQty", material_batch_id as "materialBatchId", correction_of_movement_id as "correctionOfMovementId", corrected_by_movement_id as "correctedByMovementId", correction_reason as "correctionReason", corrected_at as "correctedAt", created_at as "createdAt" from stock_movements where id=$1 for update',
+          [movementId]
+        );
+        const original = movementResult.rows[0];
+        const batchResult = original
+          ? await client.query("select * from material_batches where material_code=$1 and batch_no=$2 for update", [original.materialCode, original.batchNo])
+          : { rows: [] };
+        const batchRow = batchResult.rows[0];
+        const batch = batchRow
+          ? {
+              id: batchRow.id,
+              materialCode: batchRow.material_code,
+              batchNo: batchRow.batch_no,
+              stockQty: Number(batchRow.stock_qty || 0),
+              location: batchRow.location,
+            }
+          : null;
+        const reason = String(input.correctionReason || input.reason || "").trim();
+        assertCorrectionInput(original, batch, reason);
+        const materialResult = await client.query("select name, unit, safety_qty from material_items where code=$1 limit 1", [original.materialCode]);
+        const material = materialResult.rows[0] || {};
+        const type = original.type === "in" ? "out" : "in";
+        const qty = Number(original.qty || 0);
+        const beforeQty = Number(batch.stockQty || 0);
+        const afterQty = original.type === "in" ? beforeQty - qty : beforeQty + qty;
+        const createdAt = new Date().toISOString();
+        const correction = {
+          id: makeId("stk"),
+          materialCode: original.materialCode,
+          batchNo: original.batchNo,
+          type,
+          qty,
+          location: original.location || batch.location,
+          note: `冲正 ${original.id}：${reason}`,
+          operator: input.operator,
+          source: "correction",
+          beforeQty,
+          afterQty,
+          materialBatchId: original.materialBatchId || batch.id,
+          correctionOfMovementId: original.id,
+          correctionReason: reason,
+          createdAt,
+        };
+        await client.query("update material_batches set stock_qty=$1, location=$2, updated_at=$3 where material_code=$4 and batch_no=$5", [
+          afterQty,
+          correction.location,
+          createdAt,
+          original.materialCode,
+          original.batchNo,
+        ]);
+        await client.query("update materials set stock_qty=$1, location=$2 where code=$3 and batch_no=$4", [afterQty, correction.location, original.materialCode, original.batchNo]);
+        await client.query(
+          "insert into stock_movements(id, material_code, batch_no, type, qty, location, note, operator, source, before_qty, after_qty, material_batch_id, correction_of_movement_id, correction_reason, created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
+          [
+            correction.id,
+            correction.materialCode,
+            correction.batchNo,
+            correction.type,
+            correction.qty,
+            correction.location,
+            correction.note,
+            correction.operator,
+            correction.source,
+            correction.beforeQty,
+            correction.afterQty,
+            correction.materialBatchId,
+            correction.correctionOfMovementId,
+            correction.correctionReason,
+            correction.createdAt,
+          ]
+        );
+        await client.query("update stock_movements set corrected_by_movement_id=$1, correction_reason=$2, corrected_at=$3 where id=$4", [
+          correction.id,
+          reason,
+          createdAt,
+          original.id,
+        ]);
+        await client.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
+          makeId("act"),
+          `${material.name || correction.materialCode} ${movementTypeLabel(original.type)}已冲正`,
+          `${input.operator} · 刚刚`,
+          `${correction.batchNo} · ${qty}${material.unit || ""} · 原流水 ${original.id}`,
+          createdAt,
+        ]);
+        await client.query("commit");
+        return { movement: correction, original, state: serializePublicState(await readPostgresState(pool)) };
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
   };
 }
 
@@ -1351,6 +1511,10 @@ async function ensureSchema(pool) {
   await pool.query("alter table stock_movements add column if not exists before_qty numeric");
   await pool.query("alter table stock_movements add column if not exists after_qty numeric");
   await pool.query("alter table stock_movements add column if not exists material_batch_id text");
+  await pool.query("alter table stock_movements add column if not exists correction_of_movement_id text");
+  await pool.query("alter table stock_movements add column if not exists corrected_by_movement_id text");
+  await pool.query("alter table stock_movements add column if not exists correction_reason text");
+  await pool.query("alter table stock_movements add column if not exists corrected_at timestamptz");
 }
 
 async function migrateLegacyInventory(pool) {
@@ -1428,7 +1592,7 @@ async function readPostgresState(pool) {
     pool.query(
       'select id, work_order_id as "workOrderId", process_name as "processName", completed_qty as "completedQty", good_qty as "goodQty", bad_qty as "badQty", bad_reason as "badReason", note, operator, created_at as "createdAt" from reports order by created_at desc limit 200'
     ),
-    pool.query('select id, material_code as "materialCode", batch_no as "batchNo", type, qty, location, note, operator, source, before_qty as "beforeQty", after_qty as "afterQty", material_batch_id as "materialBatchId", created_at as "createdAt" from stock_movements order by created_at desc limit 50'),
+    pool.query('select id, material_code as "materialCode", batch_no as "batchNo", type, qty, location, note, operator, source, before_qty as "beforeQty", after_qty as "afterQty", material_batch_id as "materialBatchId", correction_of_movement_id as "correctionOfMovementId", corrected_by_movement_id as "correctedByMovementId", correction_reason as "correctionReason", corrected_at as "correctedAt", created_at as "createdAt" from stock_movements order by created_at desc limit 100'),
     pool.query('select id, title, meta, note, created_at as "createdAt" from activities order by created_at desc limit 50'),
     pool.query('select id, title, text, severity, status, created_at as "createdAt" from alerts order by created_at desc limit 50'),
   ]);

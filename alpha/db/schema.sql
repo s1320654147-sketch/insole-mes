@@ -98,6 +98,10 @@ create table if not exists stock_movements (
   before_qty numeric,
   after_qty numeric,
   material_batch_id text,
+  correction_of_movement_id text,
+  corrected_by_movement_id text,
+  correction_reason text,
+  corrected_at timestamptz,
   created_at timestamptz default now()
 );
 

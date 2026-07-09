@@ -881,7 +881,7 @@ textarea {
 }
 
 .material-grid {
-  grid-template-columns: 0.9fr 1.2fr 0.8fr 0.8fr 0.8fr 0.8fr;
+  grid-template-columns: 0.9fr 0.75fr 0.75fr 0.7fr 0.8fr 1.2fr 1.25fr;
 }
 
 .material-master-grid {
@@ -899,6 +899,26 @@ textarea {
   background: #fff;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   word-break: break-all;
+}
+
+.row-actions,
+.compact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.micro-btn {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.compact-actions {
+  margin-top: 10px;
 }
 
 .report-grid {

@@ -17,6 +17,7 @@ const mobileState = {
   scanValue: "",
   workOrderScanValue: "",
   reportSubmitting: false,
+  stockSubmitting: false,
 };
 
 const scanState = {
@@ -501,8 +502,10 @@ const renderReportForm = renderMobileReportForm;
 
 function updateStockMode() {
   const type = document.getElementById("stock-type")?.value || "in";
+  const hasBatch = Boolean(document.getElementById("stock-batch")?.value);
   document.getElementById("stock-qty-label").textContent = type === "out" ? "出库数量" : "入库数量";
-  document.getElementById("stock-submit-btn").textContent = type === "out" ? "提交出库" : "提交入库";
+  document.getElementById("stock-submit-btn").textContent = mobileState.stockSubmitting ? "正在提交..." : type === "out" ? "提交出库" : "提交入库";
+  document.getElementById("stock-submit-btn").disabled = mobileState.stockSubmitting || !hasBatch;
   document.getElementById("stock-title").textContent = type === "out" ? "扫码出库" : "扫码入库";
   updateStockFefoPreview();
 }
@@ -810,6 +813,10 @@ function openWorkflowSheet(kind, options = {}) {
   stockSheet.setAttribute("aria-hidden", String(isReport));
   document.getElementById("sheet-backdrop").classList.remove("hidden");
   document.body.classList.add("sheet-open");
+  window.setTimeout(() => {
+    const sheet = isReport ? reportSheet : stockSheet;
+    sheet.scrollTop = 0;
+  }, 40);
 
   if (isReport) {
     setActiveQuickAction("scan-work");
@@ -1022,6 +1029,7 @@ function bindEvents() {
 
   document.getElementById("stock-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (mobileState.stockSubmitting) return;
     const batchValue = document.getElementById("stock-batch").value;
     if (!batchValue) {
       showToast("当前没有可操作批次");
@@ -1037,6 +1045,8 @@ function bindEvents() {
       showToast("当前批次不符合 FEFO 或已过期，请填写原因");
       return;
     }
+    mobileState.stockSubmitting = true;
+    updateStockMode();
     try {
       const result = await api("/api/stock-movements", {
         method: "POST",
@@ -1050,15 +1060,36 @@ function bindEvents() {
           overrideReason,
         }),
       });
+      const updatedBatch = (result.state.materials || []).find((item) => item.code === materialCode && item.batchNo === batchNo);
+      const materialName = material?.name || updatedBatch?.name || materialCode;
+      const unit = material?.unit || updatedBatch?.unit || "";
+      const message = [
+        `${type === "out" ? "出库成功" : "入库成功"}`,
+        `物料：${materialName}`,
+        `批次：${batchNo}`,
+        `数量：${qty}${unit}`,
+        `当前剩余库存：${updatedBatch ? `${updatedBatch.stockQty}${unit}` : "已同步到管理端"}`,
+      ].join("\n");
+      window.alert(message);
       mobileState.data = result.state;
       document.getElementById("stock-qty").value = "0";
       document.getElementById("stock-note").value = "";
       document.getElementById("stock-override-reason").value = "";
+      mobileState.stockSubmitting = false;
       renderAll();
-      showToast(type === "out" ? "出库已同步到管理端" : "入库已同步到管理端");
+      showToast(type === "out" ? "出库成功" : "入库成功");
     } catch (error) {
+      mobileState.stockSubmitting = false;
+      updateStockMode();
+      setScanStatus(error.message);
       showToast(error.message);
     }
+  });
+
+  document.querySelectorAll(".workflow-sheet input, .workflow-sheet select, .workflow-sheet textarea").forEach((field) => {
+    field.addEventListener("focus", () => {
+      window.setTimeout(() => field.scrollIntoView({ block: "center", behavior: "smooth" }), 180);
+    });
   });
 
   document.querySelectorAll("[data-scroll]").forEach((button) => {

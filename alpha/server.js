@@ -231,6 +231,18 @@ async function handleApi(request, response, url) {
     return true;
   }
 
+  const correctionMatch = url.pathname.match(/^\/api\/stock-movements\/([^/]+)\/correct$/);
+  if (correctionMatch && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const body = await readJson(request);
+    const movementId = decodeURIComponent(correctionMatch[1]);
+    const result = await store.correctStockMovement(movementId, { ...body, operator: user.name });
+    sendJson(response, 201, await withScopedState(result, user.role));
+    return true;
+  }
+
   return false;
 }
 
