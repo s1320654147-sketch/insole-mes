@@ -1379,9 +1379,7 @@ function renderMaterials() {
             <h2>物料档案</h2>
             <div class="panel-actions">
               <span class="badge">${filteredMaterialItems.length}/${materialItems.length} 个物料</span>
-              <button class="ghost-btn slim-btn" type="button" id="export-material-items-btn">导出物料</button>
-              <button class="ghost-btn slim-btn" type="button" id="export-material-batches-btn">导出批次</button>
-              <button class="ghost-btn slim-btn" type="button" id="export-stock-movements-btn">导出流水</button>
+              <button class="ghost-btn slim-btn" type="button" id="export-material-items-btn">导出物料档案</button>
               <button class="ghost-btn slim-btn" type="button" id="new-material-item-btn">+ 新建</button>
             </div>
           </div>
@@ -1423,40 +1421,52 @@ function renderMaterials() {
           </div>
         </div>
 
-        <div class="table">
-          <div class="table-head material-grid">
-            <div>批次号</div><div>库存</div><div>初始</div><div>库位</div><div>来料</div><div>到期 / 状态</div><div>操作</div>
+        <div class="detail-block">
+          <div class="panel-head">
+            <h2>批次库存</h2>
+            <div class="panel-actions">
+              <span class="badge">${selectedBatches.length} 个批次</span>
+              <button class="ghost-btn slim-btn" type="button" id="export-material-batches-btn">导出批次库存</button>
+            </div>
           </div>
-          ${selectedBatches
-            .map((item) => {
-              const status = item.batchStatus || getBatchStatus(item);
-              const days = item.daysUntilExpiry ?? daysUntilExpiry(item.expiryDate);
-              const itemBatchCode = buildMaterialBatchCode(item);
-              const itemLabelLink = buildBatchLabelLink(item);
-              const itemPrintLink = `${itemLabelLink}${itemLabelLink.includes("?") ? "&" : "?"}print=1`;
-              return `
-                <div class="table-row material-grid clickable ${materialKey(item) === materialKey(selectedBatch) ? "active" : ""}" data-material-key="${escapeHtml(materialKey(item))}">
-                  <div>${escapeHtml(item.batchNo)}</div>
-                  <div><span class="status ${status === "已过期" || status === "已用完" ? "warn" : ""}">${Number(item.stockQty || 0)} ${escapeHtml(selectedUnit)}</span></div>
-                  <div>${Number(item.initialQty || 0)} ${escapeHtml(selectedUnit)}</div>
-                  <div>${escapeHtml(item.location || "-")}</div>
-                  <div>${escapeHtml(String(item.receivedDate || "").slice(0, 10) || "-")}</div>
-                  <div>${escapeHtml(String(item.expiryDate || "").slice(0, 10) || "-")} / ${escapeHtml(formatExpiryDistance(days))} / <span class="status ${batchStatusClass(status)}">${escapeHtml(status)}</span></div>
-                  <div class="row-actions">
-                    <a class="ghost-btn micro-btn" href="${escapeHtml(itemLabelLink)}" target="_blank" rel="noreferrer" data-row-action="open">标签</a>
-                    <a class="ghost-btn micro-btn" href="${escapeHtml(itemPrintLink)}" target="_blank" rel="noreferrer" data-row-action="print">打印</a>
-                    <button class="ghost-btn micro-btn" type="button" data-copy-batch-code="${escapeHtml(itemBatchCode)}">复制</button>
+          <div class="table">
+            <div class="table-head material-grid">
+              <div>批次号</div><div>库存</div><div>初始</div><div>库位</div><div>来料</div><div>到期 / 状态</div><div>操作</div>
+            </div>
+            ${selectedBatches
+              .map((item) => {
+                const status = item.batchStatus || getBatchStatus(item);
+                const days = item.daysUntilExpiry ?? daysUntilExpiry(item.expiryDate);
+                const itemBatchCode = buildMaterialBatchCode(item);
+                const itemLabelLink = buildBatchLabelLink(item);
+                const itemPrintLink = `${itemLabelLink}${itemLabelLink.includes("?") ? "&" : "?"}print=1`;
+                return `
+                  <div class="table-row material-grid clickable ${materialKey(item) === materialKey(selectedBatch) ? "active" : ""}" data-material-key="${escapeHtml(materialKey(item))}">
+                    <div>${escapeHtml(item.batchNo)}</div>
+                    <div><span class="status ${status === "已过期" || status === "已用完" ? "warn" : ""}">${Number(item.stockQty || 0)} ${escapeHtml(selectedUnit)}</span></div>
+                    <div>${Number(item.initialQty || 0)} ${escapeHtml(selectedUnit)}</div>
+                    <div>${escapeHtml(item.location || "-")}</div>
+                    <div>${escapeHtml(String(item.receivedDate || "").slice(0, 10) || "-")}</div>
+                    <div>${escapeHtml(String(item.expiryDate || "").slice(0, 10) || "-")} / ${escapeHtml(formatExpiryDistance(days))} / <span class="status ${batchStatusClass(status)}">${escapeHtml(status)}</span></div>
+                    <div class="row-actions">
+                      <a class="ghost-btn micro-btn" href="${escapeHtml(itemLabelLink)}" target="_blank" rel="noreferrer" data-row-action="open">标签</a>
+                      <a class="ghost-btn micro-btn" href="${escapeHtml(itemPrintLink)}" target="_blank" rel="noreferrer" data-row-action="print">打印</a>
+                      <button class="ghost-btn micro-btn" type="button" data-copy-batch-code="${escapeHtml(itemBatchCode)}">复制</button>
+                    </div>
                   </div>
-                </div>
-              `;
-            })
-            .join("") || '<div class="empty-state">当前物料还没有批次。</div>'}
+                `;
+              })
+              .join("") || '<div class="empty-state">当前物料还没有批次。</div>'}
+          </div>
         </div>
 
         <div class="detail-block">
           <div class="panel-head">
-            <h2>最近出入库</h2>
-            <span class="badge">${selectedBatch ? escapeHtml(selectedBatch.batchNo) : "批次记录"}</span>
+            <h2>出入库流水</h2>
+            <div class="panel-actions">
+              <span class="badge">${selectedBatch ? escapeHtml(selectedBatch.batchNo) : "批次记录"}</span>
+              <button class="ghost-btn slim-btn" type="button" id="export-stock-movements-btn">导出出入库流水</button>
+            </div>
           </div>
           <div class="list">
             ${

@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
@@ -7,95 +7,132 @@
     <style>
       :root {
         color-scheme: light;
-        --bg: #eef2f6;
+        --label-width: 60mm;
+        --label-height: 40mm;
+        --page-bg: #edf2f7;
         --surface: #ffffff;
-        --border: #d6dee8;
+        --surface-soft: #f8fafc;
+        --border: #d7e0ea;
         --text: #111827;
         --muted: #64748b;
         --primary: #2563eb;
+        --primary-soft: #dbeafe;
       }
-      * { box-sizing: border-box; }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
       body {
         margin: 0;
+        min-height: 100%;
+      }
+
+      body {
         padding: 24px;
-        background: var(--bg);
+        background: radial-gradient(circle at top left, #f8fbff, var(--page-bg) 45%);
         color: var(--text);
         font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
       }
-      .page {
-        width: min(100%, 920px);
+
+      .screen-shell {
+        width: min(100%, 980px);
         margin: 0 auto;
         display: grid;
         gap: 18px;
       }
-      .topbar,
-      .card {
+
+      .screen-card {
         background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: 8px;
+        border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
       }
-      .topbar {
+
+      .screen-header,
+      .control-card,
+      .preview-card,
+      .tips-card {
         padding: 18px 20px;
       }
+
+      .screen-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+
       .eyebrow {
         color: var(--primary);
         font-size: 12px;
         font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
       }
+
+      h1,
+      h2 {
+        margin: 0;
+      }
+
       h1 {
-        margin: 8px 0 6px;
+        margin-top: 8px;
         font-size: 28px;
       }
-      p {
-        margin: 0;
+
+      .lead,
+      .screen-note,
+      .preview-help,
+      .tips,
+      .print-hint {
         color: var(--muted);
         line-height: 1.6;
       }
-      .grid {
-        display: grid;
-        grid-template-columns: 1.1fr 0.9fr;
-        gap: 18px;
+
+      .lead {
+        margin-top: 8px;
       }
-      .card {
-        padding: 18px;
-        display: grid;
-        gap: 14px;
+
+      .screen-note {
+        padding: 12px 14px;
+        border: 1px solid #fdba74;
+        border-radius: 10px;
+        background: #fff7ed;
+        color: #92400e;
       }
-      .meta-grid {
+
+      .field-stack {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
       }
-      .meta-item {
-        padding: 12px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: #f8fafc;
-      }
-      .meta-label {
-        display: block;
-        margin-bottom: 6px;
+
+      .field-label,
+      .preview-head,
+      .tips-title {
         color: var(--muted);
         font-size: 12px;
-      }
-      .meta-value {
-        font-size: 16px;
         font-weight: 700;
-        word-break: break-word;
       }
+
       .code-block {
-        padding: 14px;
+        min-height: 48px;
+        padding: 12px 14px;
         border: 1px dashed var(--border);
-        border-radius: 8px;
+        border-radius: 10px;
         background: #fff;
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+        line-height: 1.5;
         word-break: break-all;
       }
+
       .actions {
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
       }
+
       .button {
         display: inline-flex;
         align-items: center;
@@ -103,207 +140,491 @@
         min-height: 42px;
         padding: 0 14px;
         border: 1px solid var(--border);
-        border-radius: 8px;
+        border-radius: 10px;
         background: #fff;
         color: var(--text);
-        text-decoration: none;
         cursor: pointer;
         font: inherit;
+        text-decoration: none;
       }
+
       .button.primary {
         border-color: var(--primary);
         background: var(--primary);
         color: #fff;
       }
-      .qr-wrap {
+
+      .preview-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .preview-badge {
+        display: inline-flex;
+        align-items: center;
+        height: 28px;
+        padding: 0 10px;
+        border-radius: 999px;
+        background: var(--primary-soft);
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .preview-stage {
         display: grid;
         place-items: center;
-        min-height: 300px;
-        padding: 16px;
-        border: 1px dashed var(--border);
-        border-radius: 8px;
+        min-height: 320px;
+        padding: 18px;
+        border-radius: 12px;
+        background:
+          linear-gradient(135deg, rgba(37, 99, 235, 0.05), rgba(15, 23, 42, 0.02)),
+          var(--surface-soft);
+      }
+
+      .label-print-stage {
+        width: var(--label-width);
+      }
+
+      .label-card {
+        width: var(--label-width);
+        height: var(--label-height);
+        padding: 2.6mm;
+        border: 0.45mm solid #111827;
+        border-radius: 2.2mm;
         background: #fff;
-      }
-      .qr-wrap svg {
-        width: min(100%, 260px);
-        height: auto;
-      }
-      .tips {
         display: grid;
-        gap: 8px;
+        grid-template-columns: minmax(0, 1fr) 18mm;
+        gap: 2.2mm;
+        overflow: hidden;
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+
+      .label-main {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: auto auto auto 1fr auto auto;
+        gap: 1mm;
+      }
+
+      .label-brand-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 2mm;
+      }
+
+      .label-brand {
+        font-size: 7.5pt;
+        font-weight: 700;
+        color: var(--primary);
+      }
+
+      .label-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.4mm 1.4mm;
+        border-radius: 999px;
+        background: #eff6ff;
+        color: var(--primary);
+        font-size: 6pt;
+        font-weight: 700;
+      }
+
+      .label-material-name {
+        font-size: 10pt;
+        font-weight: 800;
+        line-height: 1.2;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+      }
+
+      .label-meta-list {
+        display: grid;
+        gap: 0.8mm;
+      }
+
+      .label-line {
+        display: grid;
+        grid-template-columns: 10mm 1fr;
+        gap: 1.2mm;
+        align-items: baseline;
+      }
+
+      .label-key {
+        color: var(--muted);
+        font-size: 6.4pt;
+      }
+
+      .label-value {
+        min-width: 0;
+        font-size: 7.2pt;
+        font-weight: 700;
+        line-height: 1.2;
+        word-break: break-word;
+      }
+
+      .label-stock {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 1.6mm;
+        padding-top: 0.6mm;
+      }
+
+      .label-stock .label-key {
+        font-size: 6.4pt;
+      }
+
+      .label-stock strong {
+        font-size: 9pt;
+      }
+
+      .label-code-title {
+        color: var(--muted);
+        font-size: 6.2pt;
+      }
+
+      .label-code {
+        padding: 1.2mm 1.4mm;
+        border: 0.25mm dashed #94a3b8;
+        border-radius: 1.4mm;
+        background: #f8fafc;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 5.8pt;
+        line-height: 1.15;
+        word-break: break-all;
+      }
+
+      .label-side {
+        display: grid;
+        grid-template-rows: 1fr auto;
+        gap: 1mm;
+        align-items: stretch;
+      }
+
+      .qr-frame {
+        min-height: 0;
+        border: 0.25mm solid #cbd5e1;
+        border-radius: 1.8mm;
+        background: #fff;
+        display: grid;
+        place-items: center;
+        padding: 1.2mm;
+        overflow: hidden;
+      }
+
+      .qr-frame svg {
+        width: 100%;
+        height: auto;
+        display: block;
+      }
+
+      .qr-fallback {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 5.6pt;
+        line-height: 1.15;
+        word-break: break-all;
+      }
+
+      .qr-caption {
+        text-align: center;
+        color: var(--muted);
+        font-size: 6pt;
+      }
+
+      .preview-help,
+      .print-hint {
+        margin-top: 12px;
+        font-size: 13px;
+      }
+
+      .tips {
+        margin: 8px 0 0;
         padding-left: 18px;
-        margin: 0;
-        color: var(--text);
       }
-      .warn {
-        color: #92400e;
-        background: #fff7ed;
-        border: 1px solid #fdba74;
-        padding: 12px 14px;
-        border-radius: 8px;
+
+      .tips li + li {
+        margin-top: 6px;
       }
+
+      @media (max-width: 860px) {
+        body {
+          padding: 14px;
+        }
+
+        .screen-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .preview-stage {
+          min-height: auto;
+          overflow-x: auto;
+          justify-items: start;
+        }
+      }
+
       @media print {
-        @page { size: 80mm 60mm; margin: 4mm; }
-        body { background: #fff; padding: 0; }
-        .topbar, .warn, .actions, .tips-card { display: none !important; }
-        .page { width: 100%; }
-        .grid { grid-template-columns: 1fr; gap: 6px; }
-        .card { border: 1px solid #111; padding: 8px; gap: 8px; }
-        .meta-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
-        .meta-item { padding: 6px; }
-        .meta-label { margin-bottom: 2px; font-size: 10px; }
-        .meta-value { font-size: 12px; }
-        .code-block { padding: 6px; font-size: 10px; }
-        .qr-wrap { min-height: 0; padding: 6px; border: 0; }
-        .qr-wrap svg { width: 34mm; }
-        p { display: none; }
-      }
-      @media (max-width: 760px) {
-        body { padding: 14px; }
-        .grid, .meta-grid { grid-template-columns: 1fr; }
+        @page {
+          size: 60mm 40mm;
+          margin: 0;
+        }
+
+        html,
+        body {
+          width: 60mm;
+          height: 40mm;
+          margin: 0;
+          padding: 0;
+          overflow: hidden;
+          background: #fff;
+        }
+
+        body {
+          display: block;
+        }
+
+        .screen-header,
+        .screen-note,
+        .control-card,
+        .tips-card,
+        .preview-head,
+        .preview-help {
+          display: none !important;
+        }
+
+        .screen-shell,
+        .screen-grid,
+        .preview-card,
+        .preview-stage {
+          width: auto !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          border: 0 !important;
+          box-shadow: none !important;
+          background: transparent !important;
+          display: block !important;
+        }
+
+        .label-print-stage {
+          width: 60mm;
+          height: 40mm;
+          margin: 0;
+          padding: 0;
+        }
+
+        .label-card {
+          width: 60mm;
+          height: 40mm;
+          margin: 0;
+          border-radius: 0;
+        }
       }
     </style>
   </head>
   <body>
-    <div class="page">
-      <section class="topbar">
+    <div class="screen-shell">
+      <section class="screen-card screen-header">
         <div class="eyebrow">Insole MES Alpha</div>
         <h1>批次标签 / 扫码入口</h1>
-        <p>这页是给原材料箱、周转袋、流转卡用的。先生成批次，再贴标签；仓库或工人再扫码进入移动端。</p>
+        <p class="lead">这页只做一件事：把一个批次整理成可打印标签。打印时会自动收成一张紧凑标签，不再把整页说明和按钮一起带进预览。</p>
       </section>
 
-      <div class="warn" id="local-note">如果当前链接是 localhost，这个二维码更适合本机演示。真机扫码要换成局域网地址或正式线上域名。</div>
+      <div class="screen-note" id="local-note">如果当前链接是 localhost，本机预览没有问题；真机扫码请改成局域网地址或正式线上域名。</div>
 
-      <section class="grid">
-        <article class="card">
-          <div class="meta-grid" id="meta-grid"></div>
-          <div>
-            <div class="meta-label">批次码</div>
-            <div class="code-block" id="batch-code"></div>
+      <section class="screen-grid">
+        <article class="screen-card control-card">
+          <div class="field-stack">
+            <div>
+              <div class="field-label">批次码</div>
+              <div class="code-block" id="batch-code"></div>
+            </div>
+            <div>
+              <div class="field-label">移动端扫码链接</div>
+              <div class="code-block" id="batch-link"></div>
+            </div>
+            <div class="actions">
+              <button class="button" id="copy-code-btn" type="button">复制批次码</button>
+              <button class="button" id="copy-link-btn" type="button">复制扫码链接</button>
+              <a class="button primary" id="open-mobile-link" href="#">打开移动端页</a>
+              <button class="button" id="print-btn" type="button">打印标签</button>
+            </div>
           </div>
-          <div>
-            <div class="meta-label">移动端扫码链接</div>
-            <div class="code-block" id="batch-link"></div>
-          </div>
-          <div class="actions">
-            <button class="button" id="copy-code-btn" type="button">复制批次码</button>
-            <button class="button" id="copy-link-btn" type="button">复制扫码链接</button>
-            <a class="button primary" id="open-mobile-link" href="#">打开移动端页</a>
-            <button class="button" id="print-btn" type="button">打印标签</button>
-          </div>
+          <p class="print-hint">如需干净标签，请在打印设置中关闭页眉和页脚，并选择合适纸张尺寸。默认按 60mm x 40mm 小标签输出，不需要靠手动缩放才能勉强打印。</p>
         </article>
 
-        <article class="card">
-          <div class="meta-label">二维码预览</div>
-          <div class="qr-wrap" id="qr-wrap">
-            <div id="qr-image"></div>
-            <div id="qr-fallback" class="code-block" style="display:none;">当前无法加载二维码图片，请先复制扫码链接或批次码使用。</div>
+        <article class="screen-card preview-card">
+          <div class="preview-head">
+            <span>标签预览</span>
+            <span class="preview-badge">60mm x 40mm</span>
           </div>
-          <p>二维码由系统页面直接生成，不依赖外部二维码图片服务；线上部署后，换电脑或手机也能继续使用。</p>
+          <div class="preview-stage">
+            <div class="label-print-stage">
+              <section class="label-card">
+                <div class="label-main">
+                  <div class="label-brand-row">
+                    <span class="label-brand">Insole MES</span>
+                    <span class="label-pill">批次标签</span>
+                  </div>
+                  <div class="label-material-name" id="label-material-name">未传入物料名称</div>
+                  <div class="label-meta-list">
+                    <div class="label-line">
+                      <span class="label-key">物料编号</span>
+                      <span class="label-value" id="label-material-code">-</span>
+                    </div>
+                    <div class="label-line">
+                      <span class="label-key">批次号</span>
+                      <span class="label-value" id="label-batch-no">-</span>
+                    </div>
+                    <div class="label-line">
+                      <span class="label-key">库位</span>
+                      <span class="label-value" id="label-location">-</span>
+                    </div>
+                    <div class="label-line">
+                      <span class="label-key">保质期</span>
+                      <span class="label-value" id="label-expiry">-</span>
+                    </div>
+                  </div>
+                  <div class="label-stock">
+                    <span class="label-key">当前库存</span>
+                    <strong id="label-stock">-</strong>
+                  </div>
+                  <div class="label-code-title">批次码</div>
+                  <div class="label-code" id="label-batch-code">未传入批次码</div>
+                </div>
+                <div class="label-side">
+                  <div class="qr-frame">
+                    <div id="qr-image"></div>
+                    <div class="qr-fallback" id="qr-fallback" style="display:none;">当前无法生成二维码，请先复制批次码或扫码链接使用。</div>
+                  </div>
+                  <div class="qr-caption">扫码入库 / 出库</div>
+                </div>
+              </section>
+            </div>
+          </div>
+          <p class="preview-help">打印预览里应看到一张紧凑标签，而不是被拆成多页的整页说明文档。</p>
         </article>
       </section>
 
-      <article class="card tips-card">
-        <div class="meta-label">建议的实际业务逻辑</div>
+      <article class="screen-card tips-card">
+        <div class="tips-title">建议的实际业务逻辑</div>
         <ol class="tips">
           <li>先在管理端建立原材料批次，系统生成唯一批次码。</li>
-          <li>把批次标签打印出来，贴到物料箱、包装袋或周转卡上。</li>
-          <li>仓库到货时可扫码直接进入入库页；领料或退料时也扫同一张码。</li>
-          <li>工人如果只处理工单，也可以扫工单码；原材料码主要服务仓库和备料环节。</li>
+          <li>把标签打印出来，贴到物料箱、包装袋或周转卡上。</li>
+          <li>仓库到货时扫码直接进入入库页；领料、退料也扫同一张码。</li>
+          <li>工人如果只处理工单，可继续扫工单码；原材料批次码主要服务仓库和备料环节。</li>
         </ol>
       </article>
     </div>
 
     <script>
       const params = new URLSearchParams(window.location.search);
-      const batch = String(params.get('batch') || '').trim();
-      const parts = batch.split('|');
-      const materialCode = parts[1] || '-';
-      const batchNo = parts[2] || '-';
-      const batchLocation = parts.slice(3).join('|') || '-';
-      const materialName = params.get('materialName') || '-';
-      const stockQty = params.get('stockQty') || '-';
-      const unit = params.get('unit') || '';
-      const expiryDate = params.get('expiryDate') || '-';
+      const batch = String(params.get("batch") || "").trim();
+      const parts = batch.split("|");
+      const materialCode = parts[1] || "-";
+      const batchNo = parts[2] || "-";
+      const batchLocation = parts.slice(3).join("|") || "-";
+      const materialName = params.get("materialName") || "-";
+      const stockQty = params.get("stockQty") || "-";
+      const unit = params.get("unit") || "";
+      const expiryDate = params.get("expiryDate") || "-";
+      const stockLabel = stockQty === "-" ? "-" : `${stockQty}${unit ? ` ${unit}` : ""}`;
       const mobileLink = `${window.location.origin}/mobile.html?batch=${encodeURIComponent(batch)}`;
+      const autoPrint = params.get("print") === "1";
+      let printTriggered = false;
 
-      const metaItems = [
-        ['物料名称', materialName],
-        ['料号', materialCode],
-        ['批次', batchNo],
-        ['库位', batchLocation],
-        ['当前库存', `${stockQty}${unit}`],
-        ['保质期', expiryDate],
-        ['标签用途', '原材料收发'],
-      ];
-
-      document.getElementById('meta-grid').innerHTML = metaItems.map(([label, value]) => `
-        <div class="meta-item">
-          <span class="meta-label">${label}</span>
-          <div class="meta-value">${value || '-'}</div>
-        </div>
-      `).join('');
-
-      document.getElementById('batch-code').textContent = batch || '未传入批次码';
-      document.getElementById('batch-link').textContent = batch ? mobileLink : '未生成';
-      document.getElementById('open-mobile-link').href = batch ? mobileLink : '#';
-      document.getElementById('open-mobile-link').target = '_blank';
-      document.getElementById('open-mobile-link').rel = 'noreferrer';
-
-      if (/^https?:\/\/(localhost|127\.0\.0\.1)/i.test(window.location.origin)) {
-        document.getElementById('local-note').style.display = 'block';
-      } else {
-        document.getElementById('local-note').style.display = 'none';
+      function setText(id, value) {
+        document.getElementById(id).textContent = value;
       }
 
-      const qrImage = document.getElementById('qr-image');
-      const qrFallback = document.getElementById('qr-fallback');
-      function showQrFallback(message = '当前无法生成二维码，请先复制扫码链接或批次码使用。') {
-        qrImage.style.display = 'none';
-        qrFallback.style.display = 'block';
-        qrFallback.textContent = message;
+      setText("batch-code", batch || "未传入批次码");
+      setText("batch-link", batch ? mobileLink : "未生成");
+      setText("label-material-name", materialName || "-");
+      setText("label-material-code", materialCode || "-");
+      setText("label-batch-no", batchNo || "-");
+      setText("label-location", batchLocation || "-");
+      setText("label-expiry", expiryDate || "-");
+      setText("label-stock", stockLabel);
+      setText("label-batch-code", batch || "未传入批次码");
+
+      const openMobileLink = document.getElementById("open-mobile-link");
+      openMobileLink.href = batch ? mobileLink : "#";
+      openMobileLink.target = "_blank";
+      openMobileLink.rel = "noreferrer";
+
+      if (/^https?:\/\/(localhost|127\.0\.0\.1)/i.test(window.location.origin)) {
+        document.getElementById("local-note").style.display = "block";
+      } else {
+        document.getElementById("local-note").style.display = "none";
+      }
+
+      const qrImage = document.getElementById("qr-image");
+      const qrFallback = document.getElementById("qr-fallback");
+
+      function maybePrint() {
+        if (!autoPrint || printTriggered) {
+          return;
+        }
+        printTriggered = true;
+        window.setTimeout(() => window.print(), 120);
+      }
+
+      function showQrFallback(message) {
+        qrImage.style.display = "none";
+        qrFallback.hidden = false;
+        qrFallback.style.display = "block";
+        qrFallback.textContent = message || "当前无法生成二维码，请先复制批次码或扫码链接使用。";
+        maybePrint();
       }
 
       function renderBatchQr() {
         if (!batch) {
-          showQrFallback('未传入批次码，请从管理端批次里重新打开标签页。');
+          showQrFallback("未传入批次码，请从管理端批次里重新打开标签页。");
           return;
         }
         if (!window.QrLite) {
-          showQrFallback('二维码生成器未加载完成，请刷新页面；也可以先复制扫码链接使用。');
+          showQrFallback("二维码生成器未加载完成，请刷新页面；也可以先复制扫码链接使用。");
           return;
         }
         try {
-          qrImage.innerHTML = window.QrLite.renderSvg(mobileLink, { scale: 8, border: 4 });
+          qrImage.style.display = "block";
+          qrFallback.hidden = true;
+          qrImage.innerHTML = window.QrLite.renderSvg(mobileLink, { scale: 8, border: 2 });
+          maybePrint();
         } catch (error) {
           showQrFallback(error.message);
         }
       }
 
-      const qrScript = document.createElement('script');
-      qrScript.src = './qr-lite.js?v=2';
+      const qrScript = document.createElement("script");
+      qrScript.src = "./qr-lite.js?v=2";
       qrScript.async = true;
       qrScript.onload = renderBatchQr;
-      qrScript.onerror = () => showQrFallback('二维码生成器加载失败，请刷新页面；也可以先复制扫码链接使用。');
+      qrScript.onerror = () => showQrFallback("二维码生成器加载失败，请刷新页面；也可以先复制扫码链接使用。");
       document.head.appendChild(qrScript);
 
-      document.getElementById('copy-code-btn').addEventListener('click', async () => {
-        if (!batch) return;
+      document.getElementById("copy-code-btn").addEventListener("click", async () => {
+        if (!batch) {
+          return;
+        }
         await navigator.clipboard.writeText(batch);
       });
 
-      document.getElementById('copy-link-btn').addEventListener('click', async () => {
-        if (!batch) return;
+      document.getElementById("copy-link-btn").addEventListener("click", async () => {
+        if (!batch) {
+          return;
+        }
         await navigator.clipboard.writeText(mobileLink);
       });
 
-      document.getElementById('print-btn').addEventListener('click', () => {
+      document.getElementById("print-btn").addEventListener("click", () => {
         window.print();
       });
-
-      if (params.get('print') === '1') {
-        window.setTimeout(() => window.print(), 500);
-      }
     </script>
   </body>
 </html>
