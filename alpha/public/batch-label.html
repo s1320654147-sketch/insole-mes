@@ -192,13 +192,13 @@
       .label-card {
         width: var(--label-width);
         height: var(--label-height);
-        padding: 2.6mm;
+        padding: 3mm;
         border: 0.45mm solid #111827;
         border-radius: 2.2mm;
         background: #fff;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 18mm;
-        gap: 2.2mm;
+        grid-template-columns: minmax(0, 1fr) 20mm;
+        gap: 3mm;
         overflow: hidden;
         page-break-inside: avoid;
         break-inside: avoid;
@@ -207,8 +207,8 @@
       .label-main {
         min-width: 0;
         display: grid;
-        grid-template-rows: auto auto auto 1fr auto auto;
-        gap: 1mm;
+        grid-template-rows: auto auto 1fr;
+        gap: 1.4mm;
       }
 
       .label-brand-row {
@@ -236,7 +236,7 @@
       }
 
       .label-material-name {
-        font-size: 10pt;
+        font-size: 11pt;
         font-weight: 800;
         line-height: 1.2;
         overflow: hidden;
@@ -252,53 +252,22 @@
 
       .label-line {
         display: grid;
-        grid-template-columns: 10mm 1fr;
+        grid-template-columns: 12mm 1fr;
         gap: 1.2mm;
         align-items: baseline;
       }
 
       .label-key {
         color: var(--muted);
-        font-size: 6.4pt;
+        font-size: 6.6pt;
       }
 
       .label-value {
         min-width: 0;
-        font-size: 7.2pt;
+        font-size: 8pt;
         font-weight: 700;
         line-height: 1.2;
         word-break: break-word;
-      }
-
-      .label-stock {
-        display: inline-flex;
-        align-items: baseline;
-        gap: 1.6mm;
-        padding-top: 0.6mm;
-      }
-
-      .label-stock .label-key {
-        font-size: 6.4pt;
-      }
-
-      .label-stock strong {
-        font-size: 9pt;
-      }
-
-      .label-code-title {
-        color: var(--muted);
-        font-size: 6.2pt;
-      }
-
-      .label-code {
-        padding: 1.2mm 1.4mm;
-        border: 0.25mm dashed #94a3b8;
-        border-radius: 1.4mm;
-        background: #f8fafc;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 5.8pt;
-        line-height: 1.15;
-        word-break: break-all;
       }
 
       .label-side {
@@ -315,7 +284,7 @@
         background: #fff;
         display: grid;
         place-items: center;
-        padding: 1.2mm;
+        padding: 1mm;
         overflow: hidden;
       }
 
@@ -335,7 +304,8 @@
       .qr-caption {
         text-align: center;
         color: var(--muted);
-        font-size: 6pt;
+        font-size: 6.4pt;
+        font-weight: 700;
       }
 
       .preview-help,
@@ -441,7 +411,7 @@
         <article class="screen-card control-card">
           <div class="field-stack">
             <div>
-              <div class="field-label">批次码</div>
+              <div class="field-label">系统批次码（用于复制和排查，不打印到标签上）</div>
               <div class="code-block" id="batch-code"></div>
             </div>
             <div>
@@ -482,20 +452,10 @@
                       <span class="label-value" id="label-batch-no">-</span>
                     </div>
                     <div class="label-line">
-                      <span class="label-key">库位</span>
-                      <span class="label-value" id="label-location">-</span>
-                    </div>
-                    <div class="label-line">
                       <span class="label-key">保质期</span>
                       <span class="label-value" id="label-expiry">-</span>
                     </div>
                   </div>
-                  <div class="label-stock">
-                    <span class="label-key">当前库存</span>
-                    <strong id="label-stock">-</strong>
-                  </div>
-                  <div class="label-code-title">批次码</div>
-                  <div class="label-code" id="label-batch-code">未传入批次码</div>
                 </div>
                 <div class="label-side">
                   <div class="qr-frame">
@@ -528,12 +488,8 @@
       const parts = batch.split("|");
       const materialCode = parts[1] || "-";
       const batchNo = parts[2] || "-";
-      const batchLocation = parts.slice(3).join("|") || "-";
       const materialName = params.get("materialName") || "-";
-      const stockQty = params.get("stockQty") || "-";
-      const unit = params.get("unit") || "";
       const expiryDate = params.get("expiryDate") || "-";
-      const stockLabel = stockQty === "-" ? "-" : `${stockQty}${unit ? ` ${unit}` : ""}`;
       const mobileLink = `${window.location.origin}/mobile.html?batch=${encodeURIComponent(batch)}`;
       const autoPrint = params.get("print") === "1";
       let printTriggered = false;
@@ -547,10 +503,7 @@
       setText("label-material-name", materialName || "-");
       setText("label-material-code", materialCode || "-");
       setText("label-batch-no", batchNo || "-");
-      setText("label-location", batchLocation || "-");
       setText("label-expiry", expiryDate || "-");
-      setText("label-stock", stockLabel);
-      setText("label-batch-code", batch || "未传入批次码");
 
       const openMobileLink = document.getElementById("open-mobile-link");
       openMobileLink.href = batch ? mobileLink : "#";
