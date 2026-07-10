@@ -718,14 +718,31 @@ function serializeStateForRole(data, role) {
 }
 
 export async function createStore(rootDir) {
-  if (process.env.DATABASE_URL) {
-    try {
-      return await createPostgresStore();
-    } catch (error) {
-      console.warn("PostgreSQL unavailable, falling back to file store:", error.message);
+  const postgresRequired = isPostgresRequired();
+
+  if (!process.env.DATABASE_URL) {
+    if (postgresRequired) {
+      throw new Error("PostgreSQL is required but DATABASE_URL is not configured");
     }
+    return createFileStore(rootDir);
+  }
+
+  try {
+    return await createPostgresStore();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown PostgreSQL error";
+    if (postgresRequired) {
+      console.error("PostgreSQL is required but unavailable:", message);
+      throw new Error(`PostgreSQL is required but unavailable: ${message}`);
+    }
+    console.warn("PostgreSQL unavailable, falling back to file store:", message);
   }
   return createFileStore(rootDir);
+}
+
+function isPostgresRequired() {
+  const value = String(process.env.REQUIRE_POSTGRES || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(value) || process.env.NODE_ENV === "production";
 }
 
 async function createFileStore(rootDir) {
