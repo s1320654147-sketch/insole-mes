@@ -1009,6 +1009,10 @@ textarea {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.editor-grid .span-two {
+  grid-column: 1 / -1;
+}
+
 .editor-actions {
   display: flex;
   gap: 10px;

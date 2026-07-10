@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   getProcessInputContext,
@@ -180,6 +180,46 @@ function normalizeStockMovementInput(input, fallback = {}) {
   };
 }
 
+function normalizeWorkOrderMaterialIssueInput(workOrderId, input = {}) {
+  const movement = normalizeStockMovementInput({ ...input, type: "out" });
+  return {
+    workOrderId: String(workOrderId || "").trim(),
+    materialCode: movement.materialCode,
+    batchNo: movement.batchNo,
+    qty: movement.qty,
+    location: movement.location,
+    note: movement.note,
+    overrideReason: movement.overrideReason,
+    operator: String(input.operator || "").trim(),
+  };
+}
+
+function normalizeWorkOrderMaterialIssueRecord(input = {}) {
+  return {
+    id: String(input.id || "").trim(),
+    workOrderId: String(input.workOrderId || "").trim(),
+    materialCode: String(input.materialCode || "").trim(),
+    materialName: String(input.materialName || "").trim(),
+    materialBatchId: String(input.materialBatchId || "").trim(),
+    batchNo: String(input.batchNo || "").trim(),
+    qty: Number(input.qty || 0),
+    unit: String(input.unit || "").trim(),
+    location: String(input.location || "").trim(),
+    operator: String(input.operator || "").trim(),
+    source: String(input.source || "work_order_issue").trim() || "work_order_issue",
+    recommendedBatchNo: String(input.recommendedBatchNo || "").trim(),
+    isFefoRecommended: input.isFefoRecommended === true || input.isFefoRecommended === "true",
+    overrideReason: String(input.overrideReason || "").trim(),
+    stockMovementId: String(input.stockMovementId || "").trim(),
+    isCorrected: input.isCorrected === true || input.isCorrected === "true",
+    correctionMovementId: String(input.correctionMovementId || "").trim(),
+    correctionReason: String(input.correctionReason || "").trim(),
+    correctedAt: input.correctedAt || "",
+    createdAt: input.createdAt || "",
+    note: String(input.note || "").trim(),
+  };
+}
+
 function assertStockMovementInput(movement, availableQty = Number.POSITIVE_INFINITY) {
   if (!movement.materialCode) throw new Error("物料料号不能为空");
   if (!movement.batchNo) throw new Error("物料批次不能为空");
@@ -187,6 +227,66 @@ function assertStockMovementInput(movement, availableQty = Number.POSITIVE_INFIN
   if (movement.type === "out" && movement.qty > Number(availableQty || 0)) {
     throw new Error("出库数量不能大于当前库存");
   }
+}
+
+function buildWorkOrderMaterialIssue({ order, material, batch, movement, fefoPlan, input }) {
+  const recommendedBatchNo = fefoPlan?.recommendedBatch?.batchNo || "";
+  const isExpired = getBatchExpiryStatus(batch) === "已过期";
+  return {
+    id: makeId("woi"),
+    workOrderId: order.id,
+    materialCode: batch.materialCode,
+    materialName: material.name || batch.materialCode,
+    materialBatchId: batch.id || movement.materialBatchId || "",
+    batchNo: batch.batchNo,
+    qty: movement.qty,
+    unit: materialUnitLabel(material),
+    location: movement.location || batch.location || "",
+    operator: input.operator,
+    source: "work_order_issue",
+    recommendedBatchNo,
+    isFefoRecommended: Boolean(recommendedBatchNo) && recommendedBatchNo === batch.batchNo && !isExpired,
+    overrideReason: input.overrideReason || "",
+    stockMovementId: movement.id,
+    createdAt: movement.createdAt,
+    note: input.note || "",
+  };
+}
+
+function enrichWorkOrderMaterialIssues(issues = [], stockMovements = []) {
+  const movementsById = new Map(stockMovements.map((item) => [item.id, item]));
+  return issues.map((rawIssue) => {
+    const issue = normalizeWorkOrderMaterialIssueRecord(rawIssue);
+    const movement = movementsById.get(issue.stockMovementId);
+    const correction = movement?.correctedByMovementId ? movementsById.get(movement.correctedByMovementId) : null;
+    const correctionMovementId = movement?.correctedByMovementId || issue.correctionMovementId || "";
+    const correctionReason = movement?.correctionReason || correction?.correctionReason || issue.correctionReason || "";
+    const correctedAt = movement?.correctedAt || correction?.createdAt || issue.correctedAt || "";
+    const isCorrected = Boolean(correctionMovementId || issue.isCorrected);
+    return {
+      ...issue,
+      isCorrected,
+      status: isCorrected ? "已冲正" : "已领料",
+      netQty: isCorrected ? 0 : Number(issue.qty || 0),
+      correctionMovementId,
+      correctionReason,
+      correctedAt,
+    };
+  });
+}
+
+function attachWorkOrderIssueLinks(stockMovements = [], issues = []) {
+  const issueByMovementId = new Map(issues.map((issue) => [issue.stockMovementId, issue]));
+  return stockMovements.map((movement) => {
+    const issue = issueByMovementId.get(movement.id) || issueByMovementId.get(movement.correctionOfMovementId);
+    if (!issue) return movement;
+    return {
+      ...movement,
+      workOrderId: issue.workOrderId,
+      workOrderMaterialIssueId: issue.id,
+      workOrderIssueStatus: issue.status,
+    };
+  });
 }
 
 function movementTypeLabel(type) {
@@ -267,6 +367,11 @@ function normalizeMaterialItemInput(input = {}, fallback = {}) {
     supplier: String(input.supplier || fallback.supplier || "").trim(),
     status: String(input.status || fallback.status || "启用").trim() || "启用",
   };
+}
+
+function materialUnitLabel(material = {}) {
+  const unit = String(material.unit || "kg").trim();
+  return unit && !/^\d+(\.\d+)?$/.test(unit) ? unit : "kg";
 }
 
 function assertMaterialItemInput(material, existingItems = [], originalCode = "") {
@@ -450,6 +555,7 @@ export function buildFefoIssuePlan(materialCode, qty, state = {}, options = {}) 
   const now = options.now || new Date();
   const includeExpired = Boolean(options.includeExpired);
   const material = (state.materialItems || []).find((item) => item.code === materialCode) || {};
+  const unit = materialUnitLabel(material);
   const allUsable = getMaterialBatches(materialCode, state)
     .filter((batch) => Number(batch.stockQty || 0) > 0)
     .map((batch) => ({
@@ -475,7 +581,7 @@ export function buildFefoIssuePlan(materialCode, qty, state = {}, options = {}) 
       receivedDate: batch.receivedDate || "",
       status: batch.batchStatus,
       daysUntilExpiry: batch.daysUntilExpiry,
-      unit: material.unit || "",
+      unit,
     });
     remainingQty -= issueQty;
   }
@@ -485,7 +591,7 @@ export function buildFefoIssuePlan(materialCode, qty, state = {}, options = {}) 
   return {
     materialCode,
     requestedQty,
-    unit: material.unit || "",
+    unit,
     recommendedBatch: plan[0] || null,
     plan,
     remainingQty,
@@ -546,6 +652,7 @@ function normalizeState(data) {
     materials: inventory.materials,
     reports: data.reports || [],
     stockMovements: data.stockMovements || [],
+    workOrderMaterialIssues: (data.workOrderMaterialIssues || []).map(normalizeWorkOrderMaterialIssueRecord),
     activities: data.activities || [],
     alerts: data.alerts || [],
   };
@@ -553,6 +660,8 @@ function normalizeState(data) {
 
 function serializePublicState(data) {
   const state = normalizeState(data);
+  const workOrderMaterialIssues = enrichWorkOrderMaterialIssues(state.workOrderMaterialIssues, state.stockMovements);
+  const stockMovements = attachWorkOrderIssueLinks(state.stockMovements, workOrderMaterialIssues);
   return {
     samples: state.samples,
     workOrders: state.workOrders,
@@ -561,7 +670,8 @@ function serializePublicState(data) {
     materialSummaries: state.materialSummaries,
     materials: state.materials,
     reports: state.reports,
-    stockMovements: state.stockMovements,
+    stockMovements,
+    workOrderMaterialIssues,
     activities: state.activities,
     alerts: state.alerts,
     stats: [
@@ -584,7 +694,10 @@ function serializeStateForRole(data, role) {
     const materials = state.materials;
     const alerts = state.alerts.filter((item) => item.status === "open");
     const reports = state.reports.slice(0, 200);
-    const stockMovements = state.stockMovements.slice(0, 30);
+    const stockMovements = attachWorkOrderIssueLinks(
+      state.stockMovements.slice(0, 30),
+      enrichWorkOrderMaterialIssues(state.workOrderMaterialIssues, state.stockMovements)
+    );
     return {
       samples: [],
       workOrders,
@@ -624,14 +737,17 @@ async function createFileStore(rootDir) {
     try {
       return normalizeState(JSON.parse(await readFile(dataFile, "utf8")));
     } catch {
-      await writeFile(dataFile, JSON.stringify(seedData, null, 2), "utf8");
-      return normalizeState(clone(seedData));
+      const initialState = normalizeState(clone(seedData));
+      await writeState(initialState);
+      return initialState;
     }
   }
 
   async function writeState(state) {
     syncCompatInventory(state);
-    await writeFile(dataFile, JSON.stringify(state, null, 2), "utf8");
+    const tempFile = `${dataFile}.${makeId("write")}.tmp`;
+    await writeFile(tempFile, JSON.stringify(state, null, 2), "utf8");
+    await rename(tempFile, dataFile);
   }
 
   return {
@@ -821,6 +937,66 @@ async function createFileStore(rootDir) {
     async getFefoRecommendation(materialCode, qty, options = {}) {
       const state = await readState();
       return buildFefoIssuePlan(materialCode, qty, state, options);
+    },
+    async getWorkOrderMaterialIssues(workOrderId) {
+      const state = await readState();
+      const order = state.workOrders.find((item) => item.id === workOrderId);
+      if (!order) throw new Error("工单不存在");
+      const issues = enrichWorkOrderMaterialIssues(state.workOrderMaterialIssues, state.stockMovements)
+        .filter((item) => item.workOrderId === workOrderId);
+      return { issues };
+    },
+    async createWorkOrderMaterialIssue(workOrderId, input) {
+      const state = await readState();
+      const order = state.workOrders.find((item) => item.id === workOrderId);
+      if (!order) throw new Error("工单不存在");
+
+      const issueInput = normalizeWorkOrderMaterialIssueInput(workOrderId, input);
+      if (!issueInput.operator) throw new Error("操作人不能为空");
+      const material = state.materialItems.find((item) => item.code === issueInput.materialCode);
+      if (!material) throw new Error("物料档案不存在");
+      const batch = state.materialBatches.find((item) => item.materialCode === issueInput.materialCode && item.batchNo === issueInput.batchNo);
+      if (!batch) throw new Error("物料批次不存在或不属于所选物料");
+
+      const movementInput = { ...issueInput, type: "out" };
+      assertStockMovementInput(movementInput, batch.stockQty);
+      const fefoPlan = assertFefoStockMovement(movementInput, batch, state);
+      const beforeQty = Number(batch.stockQty || 0);
+      const afterQty = beforeQty - movementInput.qty;
+      const createdAt = new Date().toISOString();
+      const movement = {
+        id: makeId("stk"),
+        materialCode: batch.materialCode,
+        batchNo: batch.batchNo,
+        type: "out",
+        qty: movementInput.qty,
+        location: movementInput.location || batch.location,
+        note: [movementInput.note, movementInput.overrideReason ? `FEFO原因：${movementInput.overrideReason}` : ""].filter(Boolean).join("；"),
+        operator: issueInput.operator,
+        source: "work_order_issue",
+        beforeQty,
+        afterQty,
+        materialBatchId: batch.id,
+        overrideReason: movementInput.overrideReason,
+        recommendedBatchNo: fefoPlan?.recommendedBatch?.batchNo || "",
+        createdAt,
+      };
+      const issue = buildWorkOrderMaterialIssue({ order, material, batch, movement, fefoPlan, input: issueInput });
+
+      batch.stockQty = afterQty;
+      batch.updatedAt = createdAt;
+      if (movement.location) batch.location = movement.location;
+      state.stockMovements.unshift(movement);
+      state.workOrderMaterialIssues.unshift(issue);
+      state.activities.unshift({
+        id: makeId("act"),
+        title: `${order.id} 工单领料`,
+        meta: `${issueInput.operator} · 刚刚`,
+        note: `${material.name} / ${batch.batchNo} / ${movement.qty}${material.unit || ""}`,
+        createdAt,
+      });
+      await writeState(state);
+      return { issue, movement, state: serializePublicState(state) };
     },
     async createStockMovement(input) {
       const state = await readState();
@@ -1213,6 +1389,105 @@ async function createPostgresStore() {
       const state = await readPostgresState(pool);
       return buildFefoIssuePlan(materialCode, qty, state, options);
     },
+    async getWorkOrderMaterialIssues(workOrderId) {
+      const orderResult = await pool.query("select id from work_orders where id=$1 limit 1", [workOrderId]);
+      if (!orderResult.rows[0]) throw new Error("工单不存在");
+      const state = await readPostgresState(pool);
+      const issues = enrichWorkOrderMaterialIssues(state.workOrderMaterialIssues, state.stockMovements)
+        .filter((item) => item.workOrderId === workOrderId);
+      return { issues };
+    },
+    async createWorkOrderMaterialIssue(workOrderId, input) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const orderResult = await client.query("select id, product from work_orders where id=$1 for update", [workOrderId]);
+        const order = orderResult.rows[0];
+        if (!order) throw new Error("工单不存在");
+
+        const issueInput = normalizeWorkOrderMaterialIssueInput(workOrderId, input);
+        if (!issueInput.operator) throw new Error("操作人不能为空");
+        const materialResult = await client.query("select code, name, unit, safety_qty from material_items where code=$1 limit 1", [issueInput.materialCode]);
+        const material = materialResult.rows[0];
+        if (!material) throw new Error("物料档案不存在");
+        const batchResult = await client.query(
+          "select * from material_batches where material_code=$1 and batch_no=$2 for update",
+          [issueInput.materialCode, issueInput.batchNo]
+        );
+        const batchRow = batchResult.rows[0];
+        if (!batchRow) throw new Error("物料批次不存在或不属于所选物料");
+        const batch = {
+          id: batchRow.id,
+          materialCode: batchRow.material_code,
+          batchNo: batchRow.batch_no,
+          stockQty: Number(batchRow.stock_qty || 0),
+          location: batchRow.location,
+          receivedDate: batchRow.received_date,
+          expiryDate: batchRow.expiry_date,
+        };
+        const movementInput = { ...issueInput, type: "out" };
+        assertStockMovementInput(movementInput, batch.stockQty);
+        const stateForFefo = await readPostgresState(client);
+        const fefoPlan = assertFefoStockMovement(movementInput, batch, stateForFefo);
+        const beforeQty = batch.stockQty;
+        const afterQty = beforeQty - movementInput.qty;
+        const createdAt = new Date().toISOString();
+        const movement = {
+          id: makeId("stk"),
+          materialCode: batch.materialCode,
+          batchNo: batch.batchNo,
+          type: "out",
+          qty: movementInput.qty,
+          location: movementInput.location || batch.location,
+          note: [movementInput.note, movementInput.overrideReason ? `FEFO原因：${movementInput.overrideReason}` : ""].filter(Boolean).join("；"),
+          operator: issueInput.operator,
+          source: "work_order_issue",
+          beforeQty,
+          afterQty,
+          materialBatchId: batch.id,
+          overrideReason: movementInput.overrideReason,
+          recommendedBatchNo: fefoPlan?.recommendedBatch?.batchNo || "",
+          createdAt,
+        };
+        const issue = buildWorkOrderMaterialIssue({ order, material, batch, movement, fefoPlan, input: issueInput });
+
+        await client.query("update material_batches set stock_qty=$1, location=$2, updated_at=$3 where material_code=$4 and batch_no=$5", [
+          afterQty,
+          movement.location,
+          createdAt,
+          movement.materialCode,
+          movement.batchNo,
+        ]);
+        await client.query("update materials set stock_qty=$1, location=$2 where code=$3 and batch_no=$4", [
+          afterQty,
+          movement.location,
+          movement.materialCode,
+          movement.batchNo,
+        ]);
+        await client.query(
+          "insert into stock_movements(id, material_code, batch_no, type, qty, location, note, operator, source, before_qty, after_qty, material_batch_id, created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+          [movement.id, movement.materialCode, movement.batchNo, movement.type, movement.qty, movement.location, movement.note, movement.operator, movement.source, movement.beforeQty, movement.afterQty, movement.materialBatchId, movement.createdAt]
+        );
+        await client.query(
+          "insert into work_order_material_issues(id,work_order_id,material_code,material_name,material_batch_id,batch_no,qty,unit,location,operator,source,recommended_batch_no,is_fefo_recommended,override_reason,stock_movement_id,note,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+          [issue.id, issue.workOrderId, issue.materialCode, issue.materialName, issue.materialBatchId, issue.batchNo, issue.qty, issue.unit, issue.location, issue.operator, issue.source, issue.recommendedBatchNo, issue.isFefoRecommended, issue.overrideReason, issue.stockMovementId, issue.note, issue.createdAt]
+        );
+        await client.query("insert into activities(id,title,meta,note,created_at) values($1,$2,$3,$4,$5)", [
+          makeId("act"),
+          `${order.id} 工单领料`,
+          `${issueInput.operator} · 刚刚`,
+          `${material.name} / ${batch.batchNo} / ${movement.qty}${material.unit || ""}`,
+          createdAt,
+        ]);
+        await client.query("commit");
+        return { issue, movement, state: serializePublicState(await readPostgresState(pool)) };
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
     async createStockMovement(input) {
       const client = await pool.connect();
       try {
@@ -1489,6 +1764,25 @@ async function ensureSchema(pool) {
       operator text,
       created_at timestamptz default now()
     );
+    create table if not exists work_order_material_issues (
+      id text primary key,
+      work_order_id text not null references work_orders(id),
+      material_code text not null,
+      material_name text not null,
+      material_batch_id text not null references material_batches(id),
+      batch_no text not null,
+      qty numeric not null,
+      unit text not null,
+      location text,
+      operator text not null,
+      source text not null default 'work_order_issue',
+      recommended_batch_no text,
+      is_fefo_recommended boolean not null default false,
+      override_reason text,
+      stock_movement_id text not null unique references stock_movements(id),
+      note text,
+      created_at timestamptz default now()
+    );
     create table if not exists activities (
       id text primary key,
       title text not null,
@@ -1515,6 +1809,9 @@ async function ensureSchema(pool) {
   await pool.query("alter table stock_movements add column if not exists corrected_by_movement_id text");
   await pool.query("alter table stock_movements add column if not exists correction_reason text");
   await pool.query("alter table stock_movements add column if not exists corrected_at timestamptz");
+  await pool.query("create index if not exists work_order_material_issues_work_order_idx on work_order_material_issues(work_order_id)");
+  await pool.query("create index if not exists work_order_material_issues_material_idx on work_order_material_issues(material_code)");
+  await pool.query("create index if not exists work_order_material_issues_batch_idx on work_order_material_issues(material_batch_id)");
 }
 
 async function migrateLegacyInventory(pool) {
@@ -1583,7 +1880,7 @@ async function seedIfNeeded(pool) {
 }
 
 async function readPostgresState(pool) {
-  const [users, samples, workOrders, materialItems, materialBatches, reports, stockMovements, activities, alerts] = await Promise.all([
+  const [users, samples, workOrders, materialItems, materialBatches, reports, stockMovements, workOrderMaterialIssues, activities, alerts] = await Promise.all([
     pool.query("select id, username, name, role from app_users order by created_at"),
     pool.query("select id, name, customer, version, owner, due_date as \"dueDate\", status from samples order by id"),
     pool.query('select id, sample_id as "sampleId", product, planned_qty as "plannedQty", done_qty as "doneQty", current_process as "currentProcess", priority, status, due_at as "dueAt", route from work_orders order by id'),
@@ -1593,6 +1890,7 @@ async function readPostgresState(pool) {
       'select id, work_order_id as "workOrderId", process_name as "processName", completed_qty as "completedQty", good_qty as "goodQty", bad_qty as "badQty", bad_reason as "badReason", note, operator, created_at as "createdAt" from reports order by created_at desc limit 200'
     ),
     pool.query('select id, material_code as "materialCode", batch_no as "batchNo", type, qty, location, note, operator, source, before_qty as "beforeQty", after_qty as "afterQty", material_batch_id as "materialBatchId", correction_of_movement_id as "correctionOfMovementId", corrected_by_movement_id as "correctedByMovementId", correction_reason as "correctionReason", corrected_at as "correctedAt", created_at as "createdAt" from stock_movements order by created_at desc limit 100'),
+    pool.query('select issue.id, issue.work_order_id as "workOrderId", issue.material_code as "materialCode", issue.material_name as "materialName", issue.material_batch_id as "materialBatchId", issue.batch_no as "batchNo", issue.qty, issue.unit, issue.location, issue.operator, issue.source, issue.recommended_batch_no as "recommendedBatchNo", issue.is_fefo_recommended as "isFefoRecommended", issue.override_reason as "overrideReason", issue.stock_movement_id as "stockMovementId", issue.note, issue.created_at as "createdAt", original.corrected_by_movement_id as "correctionMovementId", original.correction_reason as "correctionReason", original.corrected_at as "correctedAt", (original.corrected_by_movement_id is not null) as "isCorrected" from work_order_material_issues issue left join stock_movements original on original.id = issue.stock_movement_id order by issue.created_at desc limit 200'),
     pool.query('select id, title, meta, note, created_at as "createdAt" from activities order by created_at desc limit 50'),
     pool.query('select id, title, text, severity, status, created_at as "createdAt" from alerts order by created_at desc limit 50'),
   ]);
@@ -1608,6 +1906,12 @@ async function readPostgresState(pool) {
       qty: Number(item.qty),
       beforeQty: item.beforeQty === null || item.beforeQty === undefined ? undefined : Number(item.beforeQty),
       afterQty: item.afterQty === null || item.afterQty === undefined ? undefined : Number(item.afterQty),
+    })),
+    workOrderMaterialIssues: workOrderMaterialIssues.rows.map((item) => ({
+      ...item,
+      qty: Number(item.qty),
+      isFefoRecommended: Boolean(item.isFefoRecommended),
+      isCorrected: Boolean(item.isCorrected),
     })),
     activities: activities.rows,
     alerts: alerts.rows,

@@ -41,6 +41,12 @@ const state = {
   sampleEditorMode: "edit",
   orderEditorMode: "edit",
   materialEditorMode: "edit",
+  workOrderIssueFormOpen: false,
+  workOrderIssueDraft: {
+    materialCode: "",
+    batchNo: "",
+    qty: "1",
+  },
   orderFilter: "all",
   materialFilter: "all",
   currentUser: null,
@@ -170,6 +176,10 @@ function percent(doneQty, plannedQty) {
 
 function getWorkOrderReports(orderId) {
   return (state.data?.reports || []).filter((report) => report.workOrderId === orderId);
+}
+
+function getWorkOrderMaterialIssues(orderId) {
+  return (state.data?.workOrderMaterialIssues || []).filter((issue) => issue.workOrderId === orderId);
 }
 
 function getWorkOrderQualitySummary(order) {
@@ -312,6 +322,123 @@ function renderWorkOrderReportHistory(order) {
         .join("")}
     </div>
   `;
+}
+
+function getWorkOrderIssueFormContext() {
+  const materialItems = getMaterialItems().filter((item) => item.status !== "停用");
+  const draft = state.workOrderIssueDraft || {};
+  const materialCode = materialItems.some((item) => item.code === draft.materialCode)
+    ? draft.materialCode
+    : materialItems[0]?.code || "";
+  const material = materialItems.find((item) => item.code === materialCode) || null;
+  const batches = getMaterialBatches().filter((batch) => batch.materialCode === materialCode && Number(batch.stockQty || 0) > 0);
+  const qty = Number(draft.qty || 0) > 0 ? Number(draft.qty) : 1;
+  const plan = material ? buildLocalFefoPlan(materialCode, qty) : { recommendedBatch: null };
+  const batchNo = batches.some((batch) => batch.batchNo === draft.batchNo)
+    ? draft.batchNo
+    : plan.recommendedBatch?.batchNo || batches[0]?.batchNo || "";
+  const batch = batches.find((item) => item.batchNo === batchNo) || null;
+  return { materialItems, materialCode, material, batches, batchNo, batch, qty };
+}
+
+function renderWorkOrderMaterialIssueHistory(order) {
+  const issues = getWorkOrderMaterialIssues(order.id);
+  if (!issues.length) return '<div class="empty-state compact-empty">暂无领料记录。领料会消耗库存；报工只记录生产进度，两者彼此独立。</div>';
+  return `
+    <div class="list" aria-label="${escapeHtml(order.id)} 领料批次">
+      ${issues
+        .map((issue) => {
+          const material = getMaterialItems().find((item) => item.code === issue.materialCode) || issue;
+          const unit = materialUnitLabel(material);
+          const statusClass = issue.isCorrected ? "warn" : issue.isFefoRecommended ? "running" : "pending";
+          const statusText = issue.isCorrected ? "已冲正" : issue.isFefoRecommended ? "按 FEFO 领料" : "非 FEFO / 强制领料";
+          const details = [
+            issue.overrideReason ? `原因：${issue.overrideReason}` : "",
+            issue.note ? `备注：${issue.note}` : "",
+            issue.isCorrected && issue.correctionReason ? `冲正原因：${issue.correctionReason}` : "",
+          ].filter(Boolean).join("；");
+          return `
+            <div class="list-item">
+              <div class="item-top">
+                <div class="item-title">${escapeHtml(issue.materialName || issue.materialCode)} / ${escapeHtml(issue.batchNo)}</div>
+                <span class="status ${statusClass}">${escapeHtml(statusText)}</span>
+              </div>
+              <div class="item-meta">料号：${escapeHtml(issue.materialCode)} / 领料：${escapeHtml(issue.qty)}${escapeHtml(unit)} / 净领料：${escapeHtml(issue.netQty)}${escapeHtml(unit)}</div>
+              <div class="item-meta">操作人：${escapeHtml(issue.operator || "-")} / 时间：${escapeHtml(formatDateTime(issue.createdAt))}</div>
+              <div class="item-note">${escapeHtml(details || "无备注")}</div>
+              ${issue.isCorrected ? `<div class="item-note">冲正时间：${escapeHtml(formatDateTime(issue.correctedAt))} / 冲正流水：${escapeHtml(issue.correctionMovementId || "-")}</div>` : ""}
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderWorkOrderIssueForm(order) {
+  if (!state.workOrderIssueFormOpen) {
+    return '<div class="editor-actions"><button class="primary-btn" type="button" id="open-work-order-issue-btn">新增领料</button></div>';
+  }
+
+  const context = getWorkOrderIssueFormContext();
+  if (!context.material || !context.batches.length || !context.batch) {
+    return '<div class="empty-state compact-empty">当前没有可领用批次。请先到物料库存建立并入库批次。</div>';
+  }
+  const unit = materialUnitLabel(context.material);
+  const advice = buildFefoAdvice(context.batch, context.qty);
+  return `
+    <form class="editor-form" id="work-order-issue-form">
+      <div class="editor-grid two">
+        <label>
+          物料
+          <select name="materialCode" id="work-order-issue-material">
+            ${context.materialItems.map((item) => `<option value="${escapeHtml(item.code)}" ${item.code === context.materialCode ? "selected" : ""}>${escapeHtml(item.code)} / ${escapeHtml(item.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          批次
+          <select name="batchNo" id="work-order-issue-batch">
+            ${context.batches.map((batch) => `<option value="${escapeHtml(batch.batchNo)}" ${batch.batchNo === context.batchNo ? "selected" : ""}>${escapeHtml(batch.batchNo)} / 库存 ${escapeHtml(batch.stockQty)}${escapeHtml(unit)} / ${escapeHtml(formatExpiryDistance(daysUntilExpiry(batch.expiryDate)))}</option>`).join("")}
+          </select>
+        </label>
+        <label>领料数量（单位：${escapeHtml(unit)}）<input name="qty" id="work-order-issue-qty" type="number" min="0.001" step="0.001" value="${escapeHtml(context.qty)}" required /></label>
+        <label>当前库位<input id="work-order-issue-location" value="${escapeHtml(context.batch.location || "-")}" readonly /></label>
+        <label class="span-two">备注<input name="note" autocomplete="new-password" placeholder="可选，例如：WO 备料、试样领用" /></label>
+      </div>
+      <div id="work-order-issue-fefo-preview">${renderFefoAdviceHtml(context.batch, context.qty)}</div>
+      <label class="override-reason-field ${advice.reasonRequired ? "" : "hidden"}" id="work-order-issue-reason-field">
+        不按 FEFO / 过期强制领料原因
+        <input name="overrideReason" autocomplete="new-password" placeholder="例如：研发试料、客户指定、异常处理" />
+      </label>
+      <div class="editor-actions">
+        <button class="primary-btn" type="submit">确认领料</button>
+        <button class="ghost-btn" type="button" id="cancel-work-order-issue-btn">取消</button>
+      </div>
+      <p class="helper-text">领料会扣减原材料批次库存；报工只记录工序进度，两者不会互相替代。</p>
+    </form>
+  `;
+}
+
+function refreshWorkOrderIssueFefoPreview() {
+  const form = document.getElementById("work-order-issue-form");
+  if (!form) return;
+  const materialCode = String(form.elements.materialCode.value || "");
+  const batchNo = String(form.elements.batchNo.value || "");
+  const qty = Number(form.elements.qty.value || 0);
+  const batch = getMaterialBatches().find((item) => item.materialCode === materialCode && item.batchNo === batchNo) || null;
+  const preview = document.getElementById("work-order-issue-fefo-preview");
+  const reasonField = document.getElementById("work-order-issue-reason-field");
+  const locationField = document.getElementById("work-order-issue-location");
+  if (!batch) {
+    if (preview) preview.innerHTML = renderFefoAdviceHtml(null, qty);
+    reasonField?.classList.add("hidden");
+    if (locationField) locationField.value = "-";
+    return;
+  }
+  const advice = buildFefoAdvice(batch, qty);
+  if (preview) preview.innerHTML = renderFefoAdviceHtml(batch, qty);
+  reasonField?.classList.toggle("hidden", !advice.reasonRequired);
+  if (locationField) locationField.value = batch.location || "-";
 }
 
 function routeToText(route = defaultRoute) {
@@ -464,6 +591,7 @@ function matchesMaterialFilter(item, filterKey) {
 
 function buildLocalFefoPlan(materialCode, qty, includeExpired = false) {
   const material = getMaterialItems().find((item) => item.code === materialCode) || {};
+  const unit = materialUnitLabel(material);
   const candidates = getMaterialBatches()
     .filter((batch) => batch.materialCode === materialCode && Number(batch.stockQty || 0) > 0)
     .map((batch) => ({ ...batch, status: getBatchStatus(batch), daysUntilExpiry: daysUntilExpiry(batch.expiryDate) }))
@@ -485,11 +613,11 @@ function buildLocalFefoPlan(materialCode, qty, includeExpired = false) {
     plan.push({
       ...batch,
       qty: issueQty,
-      unit: material.unit || "",
+      unit,
     });
     remainingQty -= issueQty;
   }
-  return { plan, recommendedBatch: plan[0] || null, remainingQty, unit: material.unit || "" };
+  return { plan, recommendedBatch: plan[0] || null, remainingQty, unit };
 }
 
 function formatExpiryDistance(days) {
@@ -1189,6 +1317,17 @@ function renderOrderDetail() {
                 ${renderWorkOrderReportHistory(order)}
               </div>
               <div class="detail-block">
+                <div class="panel-head compact-head">
+                  <div>
+                    <h2>领料批次</h2>
+                    <div class="item-note">领料消耗库存；报工记录生产进度。</div>
+                  </div>
+                  <span class="badge">${getWorkOrderMaterialIssues(order.id).length} 笔</span>
+                </div>
+                ${renderWorkOrderMaterialIssueHistory(order)}
+                ${renderWorkOrderIssueForm(order)}
+              </div>
+              <div class="detail-block">
                 <div class="panel-head">
                   <h2>工单二维码</h2>
                   <div class="panel-actions">
@@ -1345,6 +1484,98 @@ function renderOrderDetail() {
       }
     });
   }
+
+  const openWorkOrderIssueButton = document.getElementById("open-work-order-issue-btn");
+  if (openWorkOrderIssueButton && order) {
+    openWorkOrderIssueButton.addEventListener("click", () => {
+      state.workOrderIssueFormOpen = true;
+      state.workOrderIssueDraft = { materialCode: "", batchNo: "", qty: "1" };
+      renderOrderDetail();
+    });
+  }
+
+  const workOrderIssueForm = document.getElementById("work-order-issue-form");
+  if (workOrderIssueForm && order) {
+    const materialSelect = document.getElementById("work-order-issue-material");
+    const batchSelect = document.getElementById("work-order-issue-batch");
+    const qtyInput = document.getElementById("work-order-issue-qty");
+
+    materialSelect?.addEventListener("change", () => {
+      state.workOrderIssueDraft = {
+        materialCode: materialSelect.value,
+        batchNo: "",
+        qty: qtyInput?.value || "1",
+      };
+      renderOrderDetail();
+    });
+    batchSelect?.addEventListener("change", () => {
+      state.workOrderIssueDraft = {
+        materialCode: materialSelect?.value || "",
+        batchNo: batchSelect.value,
+        qty: qtyInput?.value || "1",
+      };
+      refreshWorkOrderIssueFefoPreview();
+    });
+    qtyInput?.addEventListener("input", () => {
+      state.workOrderIssueDraft = {
+        materialCode: materialSelect?.value || "",
+        batchNo: batchSelect?.value || "",
+        qty: qtyInput.value || "1",
+      };
+      refreshWorkOrderIssueFefoPreview();
+    });
+
+    document.getElementById("cancel-work-order-issue-btn")?.addEventListener("click", () => {
+      state.workOrderIssueFormOpen = false;
+      state.workOrderIssueDraft = { materialCode: "", batchNo: "", qty: "1" };
+      renderOrderDetail();
+    });
+
+    workOrderIssueForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(workOrderIssueForm);
+      const materialCode = String(formData.get("materialCode") || "");
+      const batchNo = String(formData.get("batchNo") || "");
+      const qty = Number(formData.get("qty") || 0);
+      const selectedBatch = getMaterialBatches().find((item) => item.materialCode === materialCode && item.batchNo === batchNo) || null;
+      const advice = buildFefoAdvice(selectedBatch, qty);
+      const overrideReason = String(formData.get("overrideReason") || "").trim();
+      if (advice.reasonRequired && !overrideReason) {
+        showToast("当前批次不符合 FEFO 或已过期，请填写原因");
+        return;
+      }
+      const submitButton = workOrderIssueForm.querySelector('button[type="submit"]');
+      if (submitButton?.disabled) return;
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = "正在领料...";
+      }
+      try {
+        const result = await api(`/api/work-orders/${encodeURIComponent(order.id)}/material-issues`, {
+          method: "POST",
+          body: JSON.stringify({
+            materialCode,
+            batchNo,
+            qty,
+            note: String(formData.get("note") || "").trim(),
+            overrideReason,
+          }),
+        });
+        state.data = result.state;
+        state.workOrderIssueFormOpen = false;
+        state.workOrderIssueDraft = { materialCode: "", batchNo: "", qty: "1" };
+        syncSelections();
+        renderAll();
+        showToast(`${order.id} 领料成功，库存与流水已同步`);
+      } catch (error) {
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.textContent = "确认领料";
+        }
+        showToast(error.message);
+      }
+    });
+  }
 }
 
 function renderMaterials() {
@@ -1477,15 +1708,20 @@ function renderMaterials() {
                         const movementMaterial = getMaterialItems().find((entry) => entry.code === item.materialCode) || selectedMaterialItem || {};
                         const movementUnit = materialUnitLabel(movementMaterial);
                         const statusLabel = movementStatusLabel(item);
+                        const sourceLabel = item.source === "work_order_issue" ? "来源：工单领料" : item.source === "correction" ? "来源：冲正" : "来源：普通出入库";
+                        const workOrderLink = item.workOrderId
+                          ? `<button class="ghost-btn micro-btn" type="button" data-open-work-order="${escapeHtml(item.workOrderId)}">关联工单：${escapeHtml(item.workOrderId)}</button>`
+                          : "";
                         return `
                         <div class="list-item">
                           <div class="item-top">
                             <div class="item-title">${movementTypeLabel(item.type)} ${escapeHtml(item.qty)}${escapeHtml(movementUnit)}</div>
                             <span class="status ${movementStatusClass(item) || (item.type === "out" ? "warn" : "pending")}">${escapeHtml(statusLabel)}</span>
                           </div>
-                          <div class="item-meta">物料：${escapeHtml(movementMaterial.name || item.materialCode)} / 批次：${escapeHtml(item.batchNo)} / 库位：${escapeHtml(item.location || "-")}</div>
-                          <div class="item-meta">操作人：${escapeHtml(item.operator || "-")} / 时间：${escapeHtml(formatDateTime(item.createdAt))}</div>
-                          <div class="item-note">${escapeHtml([item.note, item.correctionReason ? `原因：${item.correctionReason}` : "", item.correctionOfMovementId ? `冲正原流水：${item.correctionOfMovementId}` : "", item.correctedByMovementId ? `关联冲正流水：${item.correctedByMovementId}` : ""].filter(Boolean).join("；") || "无备注")}</div>
+                           <div class="item-meta">物料：${escapeHtml(movementMaterial.name || item.materialCode)} / 批次：${escapeHtml(item.batchNo)} / 库位：${escapeHtml(item.location || "-")}</div>
+                           <div class="item-meta">操作人：${escapeHtml(item.operator || "-")} / 时间：${escapeHtml(formatDateTime(item.createdAt))}</div>
+                           <div class="item-note">${escapeHtml(sourceLabel)} ${workOrderLink}</div>
+                           <div class="item-note">${escapeHtml([item.note, item.correctionReason ? `原因：${item.correctionReason}` : "", item.correctionOfMovementId ? `冲正原流水：${item.correctionOfMovementId}` : "", item.correctedByMovementId ? `关联冲正流水：${item.correctedByMovementId}` : ""].filter(Boolean).join("；") || "无备注")}</div>
                           ${
                             !item.correctedByMovementId && !item.correctionOfMovementId
                               ? `<div class="editor-actions compact-actions"><button class="ghost-btn slim-btn" type="button" data-correct-movement="${escapeHtml(item.id)}">冲正</button></div>`
@@ -1736,6 +1972,22 @@ function renderMaterials() {
       } catch (error) {
         showToast(error.message);
       }
+    });
+  });
+
+  document.querySelectorAll("[data-open-work-order]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const workOrderId = button.getAttribute("data-open-work-order") || "";
+      if (!state.data?.workOrders.some((item) => item.id === workOrderId)) {
+        showToast("关联工单不存在或已不可用");
+        return;
+      }
+      state.selectedOrderId = workOrderId;
+      state.orderEditorMode = "edit";
+      state.workOrderIssueFormOpen = false;
+      setView("orders");
+      renderOrders();
+      renderOrderDetail();
     });
   });
 

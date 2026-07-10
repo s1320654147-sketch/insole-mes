@@ -126,6 +126,32 @@ async function handleApi(request, response, url) {
     return true;
   }
 
+  const materialIssuesMatch = url.pathname.match(/^\/api\/work-orders\/([^/]+)\/material-issues$/);
+  if (materialIssuesMatch && request.method === "GET") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const workOrderId = decodeURIComponent(materialIssuesMatch[1]);
+    const result = await store.getWorkOrderMaterialIssues(workOrderId);
+    sendJson(response, 200, result);
+    return true;
+  }
+
+  if (materialIssuesMatch && request.method === "POST") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    const body = await readJson(request);
+    const workOrderId = decodeURIComponent(materialIssuesMatch[1]);
+    const result = await store.createWorkOrderMaterialIssue(workOrderId, {
+      ...body,
+      operator: user.name,
+      source: "work_order_issue",
+    });
+    sendJson(response, 201, await withScopedState(result, user.role));
+    return true;
+  }
+
   if (url.pathname.startsWith("/api/work-orders/") && request.method === "PUT") {
     const user = requireUser(request, response);
     if (!user) return true;

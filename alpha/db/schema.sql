@@ -105,6 +105,30 @@ create table if not exists stock_movements (
   created_at timestamptz default now()
 );
 
+create table if not exists work_order_material_issues (
+  id text primary key,
+  work_order_id text not null references work_orders(id),
+  material_code text not null,
+  material_name text not null,
+  material_batch_id text not null references material_batches(id),
+  batch_no text not null,
+  qty numeric not null,
+  unit text not null,
+  location text,
+  operator text not null,
+  source text not null default 'work_order_issue',
+  recommended_batch_no text,
+  is_fefo_recommended boolean not null default false,
+  override_reason text,
+  stock_movement_id text not null unique references stock_movements(id),
+  note text,
+  created_at timestamptz default now()
+);
+
+create index if not exists work_order_material_issues_work_order_idx on work_order_material_issues(work_order_id);
+create index if not exists work_order_material_issues_material_idx on work_order_material_issues(material_code);
+create index if not exists work_order_material_issues_batch_idx on work_order_material_issues(material_batch_id);
+
 create table if not exists activities (
   id text primary key,
   title text not null,
