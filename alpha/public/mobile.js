@@ -25,6 +25,13 @@ const scanState = {
   active: false,
   starting: false,
   target: "",
+  requestId: 0,
+  cleanupPromise: Promise.resolve(),
+};
+
+const sheetState = {
+  locked: false,
+  scrollY: 0,
 };
 
 const roleLabels = {
@@ -640,24 +647,84 @@ function applyBatchFromUrlQuery() {
   showToast("批次已自动带入");
 }
 
-function stopCameraScan(options = {}) {
-  if (scanState.scanner) {
-    scanState.scanner.stop();
-    scanState.scanner.destroy();
-    scanState.scanner = null;
+function cameraElements(target) {
+  const isWorkOrderScan = target === "workOrder";
+  return {
+    isWorkOrderScan,
+    startButton: document.getElementById(isWorkOrderScan ? "workorder-camera-btn" : "scan-camera-btn"),
+    stopButton: document.getElementById(isWorkOrderScan ? "workorder-stop-btn" : "scan-stop-btn"),
+    video: document.getElementById(isWorkOrderScan ? "workorder-scan-video" : "scan-video"),
+    cameraWrap: document.getElementById(isWorkOrderScan ? "workorder-camera-wrap" : "scan-camera-wrap"),
+  };
+}
+
+function updateCameraButtons(target, mode = "idle") {
+  const { startButton, stopButton } = cameraElements(target);
+  if (!startButton || !stopButton) return;
+  startButton.textContent = mode === "starting" ? "正在启动…" : mode === "active" ? "摄像头已启动" : "启动摄像头";
+  startButton.disabled = mode !== "idle";
+  stopButton.disabled = mode === "idle";
+}
+
+function isAbortError(error) {
+  return error?.name === "AbortError" || /aborted|aborterror/i.test(String(error?.message || ""));
+}
+
+function stopVideoTracks(video) {
+  const stream = video?.srcObject;
+  if (stream?.getTracks) stream.getTracks().forEach((track) => track.stop());
+  if (video) video.srcObject = null;
+}
+
+async function disposeScanner(scanner) {
+  if (!scanner) return;
+  try {
+    if (typeof scanner.pause === "function") {
+      await scanner.pause(true);
+    } else {
+      scanner.stop();
+    }
+  } catch (error) {
+    if (!isAbortError(error)) console.debug("停止摄像头时出现非致命异常", error);
   }
+  try {
+    scanner.destroy();
+  } catch (error) {
+    if (!isAbortError(error)) console.debug("销毁扫码器时出现非致命异常", error);
+  }
+  await new Promise((resolve) => window.setTimeout(resolve, 320));
+}
+
+async function stopCameraScan(options = {}) {
+  const previousTarget = scanState.target;
+  const scanner = scanState.scanner;
+  scanState.requestId += 1;
+  scanState.scanner = null;
   scanState.active = false;
   scanState.starting = false;
   scanState.target = "";
-  document.getElementById("workorder-camera-wrap").classList.add("hidden");
-  document.getElementById("scan-camera-wrap").classList.add("hidden");
+
+  ["workOrder", "batch"].forEach((target) => {
+    const { video, cameraWrap } = cameraElements(target);
+    cameraWrap.classList.add("hidden");
+    updateCameraButtons(target, "idle");
+    stopVideoTracks(video);
+  });
+  const previousCleanup = scanState.cleanupPromise;
+  const cleanupPromise = (async () => {
+    await previousCleanup;
+    await disposeScanner(scanner);
+  })();
+  scanState.cleanupPromise = cleanupPromise.catch(() => {});
+  await cleanupPromise;
+
   if (!options.keepStatus) {
-    setWorkOrderScanStatus("摄像头已停止。也可以直接粘贴工单码。");
-    setScanStatus("摄像头已停止。也可以直接粘贴批次码。");
+    if (previousTarget === "workOrder") setWorkOrderScanStatus("摄像头已停止。也可以直接粘贴工单码。");
+    if (previousTarget === "batch") setScanStatus("摄像头已停止。也可以直接粘贴批次码。");
   }
 }
 
-function handleScannedCode(result) {
+async function handleScannedCode(result) {
   if (!scanState.active) return;
   const value = typeof result === "string" ? result : result?.data;
   if (!value) return;
@@ -673,7 +740,7 @@ function handleScannedCode(result) {
     return;
   }
 
-  stopCameraScan({ keepStatus: true });
+  await stopCameraScan({ keepStatus: true });
   if (target === "workOrder") {
     setWorkOrderScanStatus("已识别二维码，工单已带入，可直接报工。");
   } else {
@@ -683,57 +750,73 @@ function handleScannedCode(result) {
 }
 
 function cameraErrorMessage(error) {
-  if (!window.isSecureContext) return "摄像头只能在 HTTPS 页面中使用，请打开 Render 的 https:// 地址。";
-  if (error?.name === "NotAllowedError") return "摄像头权限被拒绝，请在浏览器设置中允许此网站使用摄像头。";
-  if (error?.name === "NotFoundError") return "没有找到可用摄像头，请检查设备摄像头。";
-  if (error?.name === "NotReadableError") return "摄像头正被其他应用占用，请关闭其他扫码或拍照应用后重试。";
-  return error?.message || "摄像头开启失败，请检查浏览器权限。";
+  if (!window.isSecureContext || error?.name === "SecurityError") return "当前环境无法访问摄像头，请确认使用 HTTPS 打开系统。";
+  if (error?.name === "NotAllowedError") return "未获得相机权限，请在浏览器设置中允许访问相机。";
+  if (error?.name === "NotFoundError") return "未检测到可用摄像头，可改为手动输入。";
+  if (error?.name === "NotReadableError") return "摄像头可能被其他应用占用，请关闭其他应用后重试。";
+  if (error?.name === "NotSupportedError") return "当前浏览器不支持摄像头扫码，请手动输入二维码内容。";
+  return "相机启动失败，请重试或手动输入。";
 }
 
 async function startCameraScan(target = "batch") {
-  if (scanState.starting) return;
+  if (scanState.starting || (scanState.active && scanState.target === target)) return;
   if (!navigator.mediaDevices?.getUserMedia) {
-    const message = window.isSecureContext
-      ? "当前浏览器无法调用摄像头，请改用系统浏览器打开。"
-      : "摄像头只能在 HTTPS 页面中使用。";
-    showToast(message);
+    const message = window.isSecureContext ? "当前浏览器不支持摄像头扫码，请手动输入二维码内容。" : "当前环境无法访问摄像头，请确认使用 HTTPS 打开系统。";
     target === "workOrder" ? setWorkOrderScanStatus(message) : setScanStatus(message);
     return;
   }
 
-  try {
-    stopCameraScan();
-    scanState.starting = true;
-    scanState.target = target;
-    const isWorkOrderScan = target === "workOrder";
-    const video = document.getElementById(isWorkOrderScan ? "workorder-scan-video" : "scan-video");
-    const cameraWrap = document.getElementById(isWorkOrderScan ? "workorder-camera-wrap" : "scan-camera-wrap");
+  await stopCameraScan({ keepStatus: true });
+  const requestId = scanState.requestId + 1;
+  scanState.requestId = requestId;
+  scanState.starting = true;
+  scanState.target = target;
+  updateCameraButtons(target, "starting");
+  const { isWorkOrderScan, video, cameraWrap } = cameraElements(target);
+  let scanner = null;
 
-    scanState.scanner = new QrScanner(video, handleScannedCode, {
+  try {
+    if (requestId !== scanState.requestId) return;
+
+    scanner = new QrScanner(video, handleScannedCode, {
       preferredCamera: "environment",
       maxScansPerSecond: 8,
       highlightScanRegion: true,
       returnDetailedScanResult: true,
       onDecodeError: () => {},
     });
+    scanState.scanner = scanner;
     cameraWrap.classList.remove("hidden");
-    scanState.active = true;
-    await scanState.scanner.start();
+    await scanner.start();
+    if (requestId !== scanState.requestId || scanState.scanner !== scanner) {
+      return;
+    }
     scanState.starting = false;
+    scanState.active = true;
+    updateCameraButtons(target, "active");
     if (isWorkOrderScan) {
       setWorkOrderScanStatus("摄像头已开启，请将工单二维码完整放入取景框。");
     } else {
       setScanStatus("摄像头已开启，请将物料批次二维码完整放入取景框。");
     }
   } catch (error) {
-    stopCameraScan();
+    const isCurrentRequest = requestId === scanState.requestId;
+    if (!isCurrentRequest) return;
+    if (scanState.scanner === scanner) scanState.scanner = null;
+    await disposeScanner(scanner);
+    stopVideoTracks(video);
+    cameraWrap.classList.add("hidden");
+    scanState.starting = false;
+    scanState.active = false;
+    scanState.target = "";
+    updateCameraButtons(target, "idle");
+    console.error("相机启动失败", error);
     const message = cameraErrorMessage(error);
     if (target === "workOrder") {
       setWorkOrderScanStatus(message);
     } else {
       setScanStatus(message);
     }
-    showToast(message);
   }
 }
 
@@ -796,8 +879,25 @@ function setActiveBottomNav(id) {
   });
 }
 
+function lockPageScroll() {
+  if (sheetState.locked) return;
+  sheetState.scrollY = window.scrollY;
+  sheetState.locked = true;
+  document.body.style.top = `-${sheetState.scrollY}px`;
+  document.body.classList.add("sheet-open");
+}
+
+function unlockPageScroll() {
+  if (!sheetState.locked) return;
+  const scrollY = sheetState.scrollY;
+  sheetState.locked = false;
+  document.body.classList.remove("sheet-open");
+  document.body.style.top = "";
+  window.requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "auto" }));
+}
+
 function openWorkflowSheet(kind, options = {}) {
-  stopCameraScan({ keepStatus: true });
+  void stopCameraScan({ keepStatus: true });
   const reportSheet = document.getElementById("report-section");
   const stockSheet = document.getElementById("stock-section");
   const isReport = kind === "report";
@@ -812,10 +912,10 @@ function openWorkflowSheet(kind, options = {}) {
   reportSheet.setAttribute("aria-hidden", String(!isReport));
   stockSheet.setAttribute("aria-hidden", String(isReport));
   document.getElementById("sheet-backdrop").classList.remove("hidden");
-  document.body.classList.add("sheet-open");
+  lockPageScroll();
   window.setTimeout(() => {
     const sheet = isReport ? reportSheet : stockSheet;
-    sheet.scrollTop = 0;
+    sheet.querySelector(".workflow-sheet-body").scrollTop = 0;
   }, 40);
 
   if (isReport) {
@@ -829,14 +929,14 @@ function openWorkflowSheet(kind, options = {}) {
 }
 
 function closeWorkflowSheet() {
-  stopCameraScan({ keepStatus: true });
+  void stopCameraScan({ keepStatus: true });
   ["report-section", "stock-section"].forEach((id) => {
     const sheet = document.getElementById(id);
     sheet.classList.remove("open");
     sheet.setAttribute("aria-hidden", "true");
   });
   document.getElementById("sheet-backdrop").classList.add("hidden");
-  document.body.classList.remove("sheet-open");
+  unlockPageScroll();
   setActiveBottomNav("nav-one");
 }
 
@@ -1005,19 +1105,19 @@ function bindEvents() {
   });
 
   document.getElementById("workorder-camera-btn").addEventListener("click", () => {
-    startCameraScan("workOrder");
+    void startCameraScan("workOrder");
   });
 
   document.getElementById("workorder-stop-btn").addEventListener("click", () => {
-    stopCameraScan();
+    void stopCameraScan();
   });
 
   document.getElementById("scan-camera-btn").addEventListener("click", () => {
-    startCameraScan("batch");
+    void startCameraScan("batch");
   });
 
   document.getElementById("scan-stop-btn").addEventListener("click", () => {
-    stopCameraScan();
+    void stopCameraScan();
   });
 
   document.getElementById("report-sheet-close").addEventListener("click", closeWorkflowSheet);
@@ -1026,6 +1126,12 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeWorkflowSheet();
   });
+  window.addEventListener("pagehide", () => {
+    void stopCameraScan({ keepStatus: true });
+  });
+
+  updateCameraButtons("workOrder", "idle");
+  updateCameraButtons("batch", "idle");
 
   document.getElementById("stock-form").addEventListener("submit", async (event) => {
     event.preventDefault();

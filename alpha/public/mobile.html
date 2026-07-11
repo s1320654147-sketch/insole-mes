@@ -58,7 +58,7 @@
           <div id="task-list" class="task-list"></div>
         </section>
 
-        <section class="report-card workflow-sheet" id="report-section" aria-hidden="true">
+        <section class="workflow-sheet" id="report-section" aria-hidden="true">
           <div class="workflow-sheet-head">
             <div>
               <h2 id="report-title">工序报工</h2>
@@ -66,6 +66,7 @@
             </div>
             <button class="sheet-close" id="report-sheet-close" type="button" aria-label="关闭工序报工">×</button>
           </div>
+          <div class="workflow-sheet-body">
           <div class="scan-card" id="workorder-scan-section">
             <div class="scan-actions">
               <button class="ghost-inline" id="workorder-camera-btn" type="button">启动摄像头</button>
@@ -113,9 +114,10 @@
             <div class="form-error hidden" id="report-form-error"></div>
             <button class="submit-button" id="report-submit-btn" type="submit">提交报工</button>
           </form>
+          </div>
         </section>
 
-        <section class="report-card workflow-sheet" id="stock-section" aria-hidden="true">
+        <section class="workflow-sheet" id="stock-section" aria-hidden="true">
           <div class="workflow-sheet-head">
             <div>
               <h2 id="stock-title">扫码出入库</h2>
@@ -124,6 +126,7 @@
             <button class="sheet-close" id="stock-sheet-close" type="button" aria-label="关闭扫码出入库">×</button>
           </div>
 
+          <div class="workflow-sheet-body">
           <div class="scan-card" id="scan-section">
             <div class="scan-actions">
               <button class="ghost-inline" id="scan-camera-btn" type="button">启动摄像头</button>
@@ -174,6 +177,7 @@
             </label>
             <button class="secondary-submit" id="stock-submit-btn" type="submit">提交入库</button>
           </form>
+          </div>
         </section>
       </main>
 

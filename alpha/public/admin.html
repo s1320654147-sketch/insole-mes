@@ -64,14 +64,20 @@
             <section class="panel">
               <div class="panel-head">
                 <h2>今日重点工单</h2>
-                <span class="badge">实时</span>
+                <div class="panel-actions">
+                  <span class="badge">实时</span>
+                  <button class="ghost-btn slim-btn" id="export-dashboard-priority-orders-btn" type="button">导出重点工单</button>
+                </div>
               </div>
               <div id="focus-orders"></div>
             </section>
             <section class="panel">
               <div class="panel-head">
                 <h2>缺料与风险</h2>
-                <span class="badge warn">优先处理</span>
+                <div class="panel-actions">
+                  <span class="badge warn">优先处理</span>
+                  <button class="ghost-btn slim-btn" id="export-dashboard-risks-btn" type="button">导出缺料与风险</button>
+                </div>
               </div>
               <div id="risk-list"></div>
             </section>
@@ -80,14 +86,25 @@
             <section class="panel">
               <div class="panel-head">
                 <h2>工序进度</h2>
-                <span class="badge">车间状态</span>
+                <div class="panel-actions">
+                  <span class="badge">车间状态</span>
+                  <button class="ghost-btn slim-btn" id="export-dashboard-process-progress-btn" type="button">导出工序进度</button>
+                </div>
               </div>
               <div id="stage-board"></div>
             </section>
             <section class="panel">
               <div class="panel-head">
                 <h2>最近操作</h2>
-                <span class="badge">留痕</span>
+                <div class="panel-actions activity-panel-actions">
+                  <span class="badge">留痕</span>
+                  <button class="ghost-btn slim-btn" id="export-dashboard-activities-btn" type="button">导出操作记录</button>
+                  <div class="activity-pagination hidden" id="activity-pagination" aria-label="最近操作分页">
+                    <span id="activity-page-label">1 / 1</span>
+                    <button class="ghost-btn slim-btn" id="activity-prev-btn" type="button">上一页</button>
+                    <button class="ghost-btn slim-btn" id="activity-next-btn" type="button">下一页</button>
+                  </div>
+                </div>
               </div>
               <div id="activity-list"></div>
             </section>
@@ -117,8 +134,8 @@
         </section>
 
         <section class="view" id="orders-view">
-          <div class="panel-grid two-up">
-            <section class="panel">
+          <div class="panel-grid order-workspace" id="order-workspace">
+            <section class="panel order-list-panel" id="order-list-panel">
               <div class="panel-head">
                 <h2>工单列表</h2>
                 <span class="badge">工单驱动</span>
@@ -126,12 +143,16 @@
               <div class="order-filter-bar" id="order-status-filters" aria-label="生产视图筛选"></div>
               <div id="order-table"></div>
             </section>
-            <section class="panel">
-              <div class="panel-head">
-                <h2 id="order-editor-title">工单详情</h2>
+            <section class="panel order-detail-panel hidden" id="order-detail-panel">
+              <div class="panel-head order-detail-toolbar">
+                <div class="order-detail-heading">
+                  <button class="ghost-btn slim-btn" id="back-order-list-btn" type="button">← 返回工单列表</button>
+                  <h2 id="order-editor-title">工单详情</h2>
+                </div>
                 <div class="panel-actions">
                   <span class="badge">当前选中</span>
                   <button class="ghost-btn slim-btn" id="new-order-inline-btn" type="button">新建生产单</button>
+                  <button class="icon-btn" id="close-order-detail-btn" type="button" aria-label="关闭工单详情" title="关闭工单详情">×</button>
                 </div>
               </div>
               <div id="order-detail"></div>

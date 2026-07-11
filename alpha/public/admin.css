@@ -240,6 +240,26 @@ textarea {
   font-size: 13px;
 }
 
+.icon-btn {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .link-btn {
   text-decoration: none;
 }
@@ -291,6 +311,40 @@ textarea {
 .two-up {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-bottom: 16px;
+}
+
+.order-workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.order-detail-panel {
+  min-width: 0;
+}
+
+.order-detail-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.order-detail-heading h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-panel-actions,
+.activity-pagination {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.activity-pagination > span {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .panel,
@@ -1102,5 +1156,16 @@ textarea {
   .execution-overview-head,
   .order-execution-head {
     align-items: flex-start;
+  }
+
+  .order-detail-toolbar,
+  .order-detail-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .order-detail-toolbar .panel-actions,
+  .activity-panel-actions {
+    width: 100%;
   }
 }

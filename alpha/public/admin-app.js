@@ -31,6 +31,7 @@ const orderFilterDefinitions = [
   { key: "due-soon", label: "未来 3 天到期" },
   { key: "risk", label: "异常 / 风险" },
 ];
+const activityPageSize = 5;
 
 const state = {
   currentView: "dashboard",
@@ -47,6 +48,9 @@ const state = {
     batchNo: "",
     qty: "1",
   },
+  orderFocusMode: false,
+  orderListScrollY: 0,
+  activityPage: 1,
   orderFilter: "all",
   materialFilter: "all",
   currentUser: null,
@@ -343,7 +347,7 @@ function getWorkOrderIssueFormContext() {
 
 function renderWorkOrderMaterialIssueHistory(order) {
   const issues = getWorkOrderMaterialIssues(order.id);
-  if (!issues.length) return '<div class="empty-state compact-empty">暂无领料记录。领料会消耗库存；报工只记录生产进度，两者彼此独立。</div>';
+  if (!issues.length) return '<div class="empty-state compact-empty">暂无领料记录</div>';
   return `
     <div class="list" aria-label="${escapeHtml(order.id)} 领料批次">
       ${issues
@@ -377,7 +381,7 @@ function renderWorkOrderMaterialIssueHistory(order) {
 
 function renderWorkOrderIssueForm(order) {
   if (!state.workOrderIssueFormOpen) {
-    return '<div class="editor-actions"><button class="primary-btn" type="button" id="open-work-order-issue-btn">新增领料</button></div>';
+    return "";
   }
 
   const context = getWorkOrderIssueFormContext();
@@ -926,6 +930,133 @@ function renderList(rootId, items, mapFn) {
   root.innerHTML = `<div class="list">${items.map(mapFn).join("") || `<div class="list-item">暂无数据</div>`}</div>`;
 }
 
+function getDashboardRiskItems() {
+  const materialRisks = getMaterialItems()
+    .map((material) => ({ material, summary: getMaterialSummary(material.code) }))
+    .filter(({ summary }) => summary.lowStock)
+    .map(({ material, summary }) => ({
+      title: material.name,
+      meta: `${material.code} · 批次 ${summary.batchCount} 个 · 最近到期 ${summary.nearestExpiryDate || "-"}`,
+      note: `当前 ${summary.totalStockQty} ${material.unit} / 安全库存 ${summary.safetyQty} ${material.unit}`,
+      label: "低库存",
+      type: "低库存",
+      materialCode: material.code,
+      materialName: material.name,
+      batchNo: "",
+      currentStock: summary.totalStockQty,
+      safetyStock: summary.safetyQty,
+      expiryDate: summary.nearestExpiryDate || "",
+      riskStatus: "低库存",
+      riskDescription: `当前库存低于安全库存，涉及 ${summary.batchCount} 个批次`,
+    }));
+  const alertRisks = state.data.alerts
+    .filter((item) => item.status === "open")
+    .map((item) => ({
+      title: item.title,
+      meta: "系统预警",
+      note: item.text,
+      label: "预警",
+      type: "系统预警",
+      materialCode: item.materialCode || "",
+      materialName: item.materialName || "",
+      batchNo: item.batchNo || "",
+      currentStock: item.currentStock ?? "",
+      safetyStock: item.safetyStock ?? "",
+      expiryDate: item.expiryDate || "",
+      riskStatus: item.title || "预警",
+      riskDescription: item.text || "",
+    }));
+  return [...materialRisks, ...alertRisks];
+}
+
+function getDashboardActivities() {
+  return [...(state.data.activities || [])]
+    .map((item, index) => ({ item, index, time: new Date(item.createdAt || 0).getTime() || 0 }))
+    .sort((left, right) => right.time - left.time || left.index - right.index)
+    .map(({ item }) => item);
+}
+
+function activityExportFields(item) {
+  const title = String(item.title || "");
+  const note = String(item.note || "");
+  const meta = String(item.meta || "");
+  const workOrderId = title.match(/WO-[A-Za-z0-9-]+/i)?.[0] || note.match(/WO-[A-Za-z0-9-]+/i)?.[0] || "";
+  const materialCode = title.match(/RM-[A-Za-z0-9-]+/i)?.[0] || note.match(/RM-[A-Za-z0-9-]+/i)?.[0] || "";
+  const operationType = ["工单领料", "报工", "冲正", "入库", "出库", "建档"].find((type) => title.includes(type)) || title;
+  const operator = meta.split("·")[0]?.trim() || "";
+  return { operationType, workOrderId, materialCode, operator };
+}
+
+function bindDashboardExports(risks, activities) {
+  document.getElementById("export-dashboard-priority-orders-btn").onclick = () => {
+    const rows = state.data.workOrders.map((order) => {
+      const quality = getWorkOrderQualitySummary(order);
+      const dueRisk = getDueDateRisk(order);
+      return [
+        order.id,
+        order.product,
+        order.currentProcess,
+        order.status,
+        Number(order.plannedQty || 0),
+        quality.finishedGoodQty,
+        quality.currentTransferableGoodQty,
+        quality.badQty,
+        order.dueAt || "",
+        dueRisk.key === "overdue" ? "是" : "否",
+        ["高", "加急"].includes(order.priority) ? "是" : "否",
+      ];
+    });
+    downloadCsv(
+      `dashboard-priority-orders-${fileDateStamp()}.csv`,
+      ["工单号", "产品", "当前工序", "工单状态", "计划数量", "成品良品", "当前可流转", "累计不良", "交期", "是否逾期", "是否加急"],
+      rows
+    );
+  };
+
+  document.getElementById("export-dashboard-risks-btn").onclick = () => {
+    downloadCsv(
+      `dashboard-risks-${fileDateStamp()}.csv`,
+      ["类型", "物料编号", "物料名称", "批次号", "当前库存", "安全库存", "到期日期", "风险状态", "风险说明"],
+      risks.map((item) => [item.type, item.materialCode, item.materialName, item.batchNo, item.currentStock, item.safetyStock, item.expiryDate, item.riskStatus, item.riskDescription])
+    );
+  };
+
+  document.getElementById("export-dashboard-process-progress-btn").onclick = () => {
+    const rows = state.data.workOrders.map((order) => {
+      const quality = getWorkOrderQualitySummary(order);
+      const progress = getProcessProgressSummary(order);
+      const nextStage = (order.route || []).find((step) => step.status === "待开始")?.name || "待完工";
+      return [
+        order.id,
+        order.product,
+        order.currentProcess,
+        nextStage,
+        order.status,
+        `${progress.completed}/${progress.total || 0}`,
+        quality.currentTransferableGoodQty,
+        quality.finishedGoodQty,
+      ];
+    });
+    downloadCsv(
+      `dashboard-process-progress-${fileDateStamp()}.csv`,
+      ["工单号", "产品", "当前工序", "下一工序", "工单状态", "工序完成进度", "当前可流转", "成品良品"],
+      rows
+    );
+  };
+
+  document.getElementById("export-dashboard-activities-btn").onclick = () => {
+    const rows = activities.map((item) => {
+      const fields = activityExportFields(item);
+      return [formatDateTime(item.createdAt), fields.operationType, item.title || "", fields.workOrderId, fields.materialCode, item.batchNo || "", fields.operator, item.qty ?? "", item.note || ""];
+    });
+    downloadCsv(
+      `dashboard-activities-${fileDateStamp()}.csv`,
+      ["操作时间", "操作类型", "操作对象", "工单号", "物料编号", "批次号", "操作人", "数量", "备注 / 原因"],
+      rows
+    );
+  };
+}
+
 function renderDashboard() {
   renderStats();
 
@@ -948,21 +1079,10 @@ function renderDashboard() {
     `;
   });
 
-  const materialRisks = getMaterialItems()
-    .map((item) => ({ item, summary: getMaterialSummary(item.code) }))
-    .filter(({ summary }) => summary.lowStock)
-    .map((item) => ({
-      title: item.item.name,
-      meta: `${item.item.code} · 批次 ${item.summary.batchCount} 个 · 最近到期 ${item.summary.nearestExpiryDate || "-"}`,
-      note: `当前 ${item.summary.totalStockQty} ${item.item.unit} / 安全库存 ${item.summary.safetyQty} ${item.item.unit}`,
-      label: "低库存",
-    }));
-  const alertRisks = state.data.alerts
-    .filter((item) => item.status === "open")
-    .map((item) => ({ title: item.title, meta: "系统预警", note: item.text, label: "预警" }));
+  const risks = getDashboardRiskItems();
   renderList(
     "risk-list",
-    [...materialRisks, ...alertRisks].slice(0, 6),
+    risks.slice(0, 6),
     (item) => `
       <div class="list-item">
         <div class="item-top">
@@ -976,7 +1096,7 @@ function renderDashboard() {
   );
 
   renderList("stage-board", state.data.workOrders, (order) => {
-    const nextStage = order.route.find((step) => step.status === "待开始")?.name || "待完工";
+    const nextStage = (order.route || []).find((step) => step.status === "待开始")?.name || "待完工";
     return `
       <div class="list-item">
         <div class="item-top">
@@ -988,9 +1108,13 @@ function renderDashboard() {
     `;
   });
 
+  const activities = getDashboardActivities();
+  const pageCount = Math.max(1, Math.ceil(activities.length / activityPageSize));
+  state.activityPage = Math.min(Math.max(1, state.activityPage), pageCount);
+  const pageStart = (state.activityPage - 1) * activityPageSize;
   renderList(
     "activity-list",
-    state.data.activities,
+    activities.slice(pageStart, pageStart + activityPageSize),
     (item) => `
       <div class="list-item">
         <div class="item-top"><div class="item-title">${escapeHtml(item.title)}</div></div>
@@ -999,6 +1123,25 @@ function renderDashboard() {
       </div>
     `
   );
+
+  const pagination = document.getElementById("activity-pagination");
+  pagination.classList.toggle("hidden", activities.length <= activityPageSize);
+  document.getElementById("activity-page-label").textContent = `${state.activityPage} / ${pageCount}`;
+  const previousButton = document.getElementById("activity-prev-btn");
+  const nextButton = document.getElementById("activity-next-btn");
+  previousButton.disabled = state.activityPage <= 1;
+  nextButton.disabled = state.activityPage >= pageCount;
+  previousButton.onclick = () => {
+    if (state.activityPage <= 1) return;
+    state.activityPage -= 1;
+    renderDashboard();
+  };
+  nextButton.onclick = () => {
+    if (state.activityPage >= pageCount) return;
+    state.activityPage += 1;
+    renderDashboard();
+  };
+  bindDashboardExports(risks, activities);
 }
 
 function renderSamples() {
@@ -1197,7 +1340,39 @@ function renderWorkOrderStatusFilters() {
   });
 }
 
+function updateOrderWorkspaceVisibility() {
+  const listPanel = document.getElementById("order-list-panel");
+  const detailPanel = document.getElementById("order-detail-panel");
+  const workspace = document.getElementById("order-workspace");
+  const showDetail = state.orderFocusMode || state.orderEditorMode === "create";
+  listPanel.classList.toggle("hidden", showDetail);
+  detailPanel.classList.toggle("hidden", !showDetail);
+  workspace.classList.toggle("detail-mode", showDetail);
+}
+
+function focusOrderDetail() {
+  state.orderFocusMode = true;
+  updateOrderWorkspaceVisibility();
+  window.requestAnimationFrame(() => {
+    const ordersView = document.getElementById("orders-view");
+    const top = ordersView.getBoundingClientRect().top + window.scrollY - 12;
+    window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+  });
+}
+
+function leaveOrderFocusMode() {
+  const scrollY = state.orderListScrollY;
+  state.orderFocusMode = false;
+  state.workOrderIssueFormOpen = false;
+  state.orderEditorMode = "edit";
+  if (!state.selectedOrderId) state.selectedOrderId = state.data?.workOrders?.[0]?.id || "";
+  renderOrders();
+  renderOrderDetail();
+  window.requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "auto" }));
+}
+
 function renderOrders() {
+  updateOrderWorkspaceVisibility();
   renderWorkOrderStatusFilters();
   const filteredOrders = state.data.workOrders.filter((order) => matchesOrderFilter(order, state.orderFilter));
   document.getElementById("order-table").innerHTML = filteredOrders.length
@@ -1250,17 +1425,22 @@ function renderOrders() {
 
   document.getElementById("order-table").querySelectorAll("[data-order-id]").forEach((row) => {
     row.addEventListener("click", () => {
+      state.orderListScrollY = window.scrollY;
       state.selectedOrderId = row.getAttribute("data-order-id");
       state.orderEditorMode = "edit";
+      state.workOrderIssueFormOpen = false;
       renderOrders();
       renderOrderDetail();
+      focusOrderDetail();
     });
   });
 }
 
 function renderOrderDetail() {
-  document.getElementById("order-editor-title").textContent = state.orderEditorMode === "create" ? "新建生产单" : "工单详情与编辑";
   const order = state.orderEditorMode === "edit" ? getSelectedOrder() : null;
+  document.getElementById("order-editor-title").textContent = order
+    ? `${order.id} · ${order.product || "未填写产品"}`
+    : "新建生产单";
   const draft = makeOrderDraft(order || {});
   const root = document.getElementById("order-detail");
   const workOrderCode = buildWorkOrderCode(order);
@@ -1322,7 +1502,10 @@ function renderOrderDetail() {
                     <h2>领料批次</h2>
                     <div class="item-note">领料消耗库存；报工记录生产进度。</div>
                   </div>
-                  <span class="badge">${getWorkOrderMaterialIssues(order.id).length} 笔</span>
+                  <div class="panel-actions">
+                    <span class="badge">${getWorkOrderMaterialIssues(order.id).length} 笔</span>
+                    <button class="primary-btn slim-btn" type="button" id="open-work-order-issue-btn" ${state.workOrderIssueFormOpen ? "disabled" : ""}>新增领料</button>
+                  </div>
                 </div>
                 ${renderWorkOrderMaterialIssueHistory(order)}
                 ${renderWorkOrderIssueForm(order)}
@@ -1412,8 +1595,10 @@ function renderOrderDetail() {
     inlineNewOrderButton.onclick = () => {
       state.orderEditorMode = "create";
       state.selectedOrderId = "";
+      state.orderFocusMode = true;
       renderOrders();
       renderOrderDetail();
+      focusOrderDetail();
     };
   }
 
@@ -1422,8 +1607,7 @@ function renderOrderDetail() {
     cancelOrderButton.addEventListener("click", () => {
       state.orderEditorMode = "edit";
       state.selectedOrderId = state.data.workOrders[0]?.id || "";
-      renderOrders();
-      renderOrderDetail();
+      leaveOrderFocusMode();
     });
   }
 
@@ -2217,6 +2401,7 @@ function applyAdminDeepLinkFromUrlQuery() {
   if (workOrderId && state.data.workOrders.some((item) => item.id === workOrderId)) {
     state.selectedOrderId = workOrderId;
     state.orderEditorMode = "edit";
+    state.orderFocusMode = true;
     setView("orders");
   }
 }
@@ -2243,18 +2428,24 @@ function logout() {
   state.selectedOrderId = "";
   state.sampleEditorMode = "edit";
   state.orderEditorMode = "edit";
+  state.orderFocusMode = false;
+  state.orderListScrollY = 0;
+  state.activityPage = 1;
   document.getElementById("login-error").textContent = "";
   renderUser();
   setLoggedIn(false);
 }
 
 function enterNewOrderMode() {
+  state.orderListScrollY = window.scrollY;
   state.orderEditorMode = "create";
   state.selectedOrderId = "";
+  state.orderFocusMode = true;
   setView("orders");
   if (state.data) {
     renderOrders();
     renderOrderDetail();
+    focusOrderDetail();
   }
 }
 
@@ -2263,6 +2454,8 @@ function bindEvents() {
   document.getElementById("refresh-btn").addEventListener("click", loadState);
   document.getElementById("logout-btn").addEventListener("click", logout);
   document.getElementById("new-order-btn").addEventListener("click", enterNewOrderMode);
+  document.getElementById("back-order-list-btn").addEventListener("click", leaveOrderFocusMode);
+  document.getElementById("close-order-detail-btn").addEventListener("click", leaveOrderFocusMode);
   document.getElementById("login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
