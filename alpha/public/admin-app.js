@@ -49,7 +49,13 @@ const state = {
     qty: "1",
   },
   orderFocusMode: false,
+  orderDrawerMode: "detail",
+  orderFormDirty: false,
+  orderFormInitialSnapshot: "",
+  orderSaving: false,
+  orderScrollLocked: false,
   orderListScrollY: 0,
+  orderBeforeCreateId: "",
   activityPage: 1,
   orderFilter: "all",
   materialFilter: "all",
@@ -1341,34 +1347,99 @@ function renderWorkOrderStatusFilters() {
 }
 
 function updateOrderWorkspaceVisibility() {
-  const listPanel = document.getElementById("order-list-panel");
   const detailPanel = document.getElementById("order-detail-panel");
-  const workspace = document.getElementById("order-workspace");
+  const backdrop = document.getElementById("order-detail-backdrop");
   const showDetail = state.orderFocusMode || state.orderEditorMode === "create";
-  listPanel.classList.toggle("hidden", showDetail);
   detailPanel.classList.toggle("hidden", !showDetail);
-  workspace.classList.toggle("detail-mode", showDetail);
+  detailPanel.setAttribute("aria-hidden", String(!showDetail));
+  backdrop.classList.toggle("hidden", !showDetail);
+}
+
+function hasUnsavedOrderChanges() {
+  return state.orderFormDirty && (state.orderDrawerMode === "edit" || state.orderEditorMode === "create");
+}
+
+function confirmDiscardOrderChanges() {
+  if (state.orderSaving) {
+    showToast("工单正在保存，请稍候");
+    return false;
+  }
+  return !hasUnsavedOrderChanges() || window.confirm("当前工单有未保存修改，确认放弃这些修改吗？");
+}
+
+function lockOrderListScroll() {
+  if (state.orderScrollLocked) return;
+  state.orderListScrollY = window.scrollY;
+  state.orderScrollLocked = true;
+  document.body.style.top = `-${state.orderListScrollY}px`;
+  document.body.classList.add("order-drawer-open");
+}
+
+function unlockOrderListScroll() {
+  if (!state.orderScrollLocked) return;
+  const scrollY = state.orderListScrollY;
+  state.orderScrollLocked = false;
+  document.body.classList.remove("order-drawer-open");
+  document.body.style.top = "";
+  window.requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "auto" }));
 }
 
 function focusOrderDetail() {
   state.orderFocusMode = true;
   updateOrderWorkspaceVisibility();
+  lockOrderListScroll();
   window.requestAnimationFrame(() => {
-    const ordersView = document.getElementById("orders-view");
-    const top = ordersView.getBoundingClientRect().top + window.scrollY - 12;
-    window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+    const drawerScroll = document.getElementById("order-drawer-scroll");
+    if (drawerScroll) drawerScroll.scrollTop = 0;
+    document.getElementById("close-order-detail-btn")?.focus({ preventScroll: true });
   });
 }
 
 function leaveOrderFocusMode() {
-  const scrollY = state.orderListScrollY;
+  const wasCreating = state.orderEditorMode === "create";
   state.orderFocusMode = false;
   state.workOrderIssueFormOpen = false;
+  state.orderDrawerMode = "detail";
+  state.orderFormDirty = false;
+  state.orderFormInitialSnapshot = "";
+  state.orderSaving = false;
   state.orderEditorMode = "edit";
+  if (wasCreating) state.selectedOrderId = state.orderBeforeCreateId || state.data?.workOrders?.[0]?.id || "";
   if (!state.selectedOrderId) state.selectedOrderId = state.data?.workOrders?.[0]?.id || "";
   renderOrders();
   renderOrderDetail();
-  window.requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "auto" }));
+  updateOrderWorkspaceVisibility();
+  unlockOrderListScroll();
+  window.requestAnimationFrame(() => {
+    document.querySelector(`[data-order-id="${CSS.escape(state.selectedOrderId)}"]`)?.focus({ preventScroll: true });
+  });
+}
+
+function requestCloseOrderDrawer() {
+  if (!confirmDiscardOrderChanges()) return false;
+  leaveOrderFocusMode();
+  return true;
+}
+
+function startOrderEditing() {
+  if (state.orderEditorMode !== "edit" || !state.selectedOrderId) return;
+  state.orderDrawerMode = "edit";
+  state.orderFormDirty = false;
+  state.orderFormInitialSnapshot = "";
+  state.workOrderIssueFormOpen = false;
+  renderOrderDetail();
+}
+
+function cancelOrderEditing() {
+  if (!confirmDiscardOrderChanges()) return;
+  if (state.orderEditorMode === "create") {
+    leaveOrderFocusMode();
+    return;
+  }
+  state.orderDrawerMode = "detail";
+  state.orderFormDirty = false;
+  state.orderFormInitialSnapshot = "";
+  renderOrderDetail();
 }
 
 function renderOrders() {
@@ -1425,9 +1496,12 @@ function renderOrders() {
 
   document.getElementById("order-table").querySelectorAll("[data-order-id]").forEach((row) => {
     row.addEventListener("click", () => {
-      state.orderListScrollY = window.scrollY;
+      if (!confirmDiscardOrderChanges()) return;
       state.selectedOrderId = row.getAttribute("data-order-id");
       state.orderEditorMode = "edit";
+      state.orderDrawerMode = "detail";
+      state.orderFormDirty = false;
+      state.orderFormInitialSnapshot = "";
       state.workOrderIssueFormOpen = false;
       renderOrders();
       renderOrderDetail();
@@ -1436,11 +1510,40 @@ function renderOrders() {
   });
 }
 
+function updateOrderDrawerChrome(order, showEditor) {
+  const title = document.getElementById("order-editor-title");
+  const modeLabel = document.getElementById("order-drawer-mode-label");
+  const status = document.getElementById("order-drawer-status");
+  const editButton = document.getElementById("edit-order-btn");
+  const cancelButton = document.getElementById("cancel-order-edit-btn");
+  const footer = document.getElementById("order-drawer-footer");
+  const saveButton = document.getElementById("order-save-btn");
+  const isCreating = state.orderEditorMode === "create";
+
+  title.textContent = isCreating
+    ? "新建生产单"
+    : showEditor
+      ? `编辑工单 · ${order?.id || ""}`
+      : `${order?.id || "未选择工单"} · ${order?.product || "未填写产品"}`;
+  modeLabel.textContent = isCreating ? "新建工单" : showEditor ? "工单编辑" : "工单详情";
+  status.textContent = isCreating ? "待保存" : order?.status || "当前状态";
+  status.className = `status ${normalizeStatus(isCreating ? "待开始" : order?.status || "待开始")}`;
+  status.classList.toggle("hidden", showEditor);
+  editButton.classList.toggle("hidden", showEditor || !order);
+  cancelButton.classList.toggle("hidden", !showEditor);
+  footer.classList.toggle("hidden", !showEditor);
+  saveButton.textContent = state.orderSaving ? "正在保存..." : isCreating ? "保存生产单" : "保存工单";
+  saveButton.disabled = state.orderSaving;
+}
+
+function snapshotOrderForm(form) {
+  return JSON.stringify(Array.from(new FormData(form).entries()));
+}
+
 function renderOrderDetail() {
   const order = state.orderEditorMode === "edit" ? getSelectedOrder() : null;
-  document.getElementById("order-editor-title").textContent = order
-    ? `${order.id} · ${order.product || "未填写产品"}`
-    : "新建生产单";
+  const showEditor = state.orderEditorMode === "create" || state.orderDrawerMode === "edit";
+  updateOrderDrawerChrome(order, showEditor);
   const draft = makeOrderDraft(order || {});
   const root = document.getElementById("order-detail");
   const workOrderCode = buildWorkOrderCode(order);
@@ -1455,7 +1558,7 @@ function renderOrderDetail() {
   root.innerHTML = `
     <div class="detail-stack">
       ${
-        order
+        order && !showEditor
           ? `
             <div class="detail-card">
               <div class="detail-block execution-overview">
@@ -1528,9 +1631,10 @@ function renderOrderDetail() {
               </div>
             </div>
           `
-          : `<div class="empty-state">先选一张工单，或者直接新建生产单。</div>`
+          : ""
       }
-      <form class="editor-form" id="order-form">
+      ${showEditor ? `
+      <form class="editor-form order-editor-form" id="order-form">
         <div class="detail-block">
           <div class="detail-title">${order ? `当前工单：${escapeHtml(order.id)}` : "编号保存后自动生成"}</div>
           <div class="item-note">建单时间：${escapeHtml(formatDateTime(order?.createdAt))}</div>
@@ -1582,39 +1686,23 @@ function renderOrderDetail() {
           </label>
           <p class="helper-text">建议一行一个工序，例如：备料|待开始、裁切 / 开料|待开始。</p>
         </div>
-        <div class="editor-actions">
-          <button class="primary-btn" type="submit">${state.orderEditorMode === "create" ? "保存生产单" : "更新工单"}</button>
-          ${state.orderEditorMode === "create" ? `<button class="ghost-btn" type="button" id="cancel-order-create-btn">取消</button>` : ""}
-        </div>
       </form>
+      ` : ""}
     </div>
   `;
 
-  const inlineNewOrderButton = document.getElementById("new-order-inline-btn");
-  if (inlineNewOrderButton) {
-    inlineNewOrderButton.onclick = () => {
-      state.orderEditorMode = "create";
-      state.selectedOrderId = "";
-      state.orderFocusMode = true;
-      renderOrders();
-      renderOrderDetail();
-      focusOrderDetail();
-    };
-  }
-
-  const cancelOrderButton = document.getElementById("cancel-order-create-btn");
-  if (cancelOrderButton) {
-    cancelOrderButton.addEventListener("click", () => {
-      state.orderEditorMode = "edit";
-      state.selectedOrderId = state.data.workOrders[0]?.id || "";
-      leaveOrderFocusMode();
-    });
-  }
-
   const orderForm = document.getElementById("order-form");
   if (orderForm) {
+    state.orderFormInitialSnapshot = snapshotOrderForm(orderForm);
+    state.orderFormDirty = false;
+    const updateDirtyState = () => {
+      state.orderFormDirty = snapshotOrderForm(orderForm) !== state.orderFormInitialSnapshot;
+    };
+    orderForm.addEventListener("input", updateDirtyState);
+    orderForm.addEventListener("change", updateDirtyState);
     orderForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (state.orderSaving) return;
       const formData = new FormData(orderForm);
       const payload = {
         sampleId: formData.get("sampleId"),
@@ -1627,6 +1715,8 @@ function renderOrderDetail() {
         dueAt: formData.get("dueAt"),
         route: parseRouteText(formData.get("routeText")),
       };
+      state.orderSaving = true;
+      updateOrderDrawerChrome(order, true);
       try {
         const mode = state.orderEditorMode;
         const result =
@@ -1636,10 +1726,16 @@ function renderOrderDetail() {
         state.data = result.state;
         state.selectedOrderId = result.workOrder.id;
         state.orderEditorMode = "edit";
+        state.orderDrawerMode = "detail";
+        state.orderFormDirty = false;
+        state.orderFormInitialSnapshot = "";
+        state.orderSaving = false;
         syncSelections();
         renderAll();
         showToast(mode === "create" ? "生产单已新建" : "生产单已更新");
       } catch (error) {
+        state.orderSaving = false;
+        updateOrderDrawerChrome(order, true);
         showToast(error.message);
       }
     });
@@ -2401,6 +2497,7 @@ function applyAdminDeepLinkFromUrlQuery() {
   if (workOrderId && state.data.workOrders.some((item) => item.id === workOrderId)) {
     state.selectedOrderId = workOrderId;
     state.orderEditorMode = "edit";
+    state.orderDrawerMode = "detail";
     state.orderFocusMode = true;
     setView("orders");
   }
@@ -2410,6 +2507,7 @@ async function loadState() {
   state.data = await api("/api/state");
   applyAdminDeepLinkFromUrlQuery();
   renderAll();
+  if (state.orderFocusMode) lockOrderListScroll();
 }
 
 async function loadSession() {
@@ -2421,6 +2519,8 @@ async function loadSession() {
 }
 
 function logout() {
+  if (!confirmDiscardOrderChanges()) return;
+  unlockOrderListScroll();
   clearToken();
   state.currentUser = null;
   state.data = null;
@@ -2429,6 +2529,10 @@ function logout() {
   state.sampleEditorMode = "edit";
   state.orderEditorMode = "edit";
   state.orderFocusMode = false;
+  state.orderDrawerMode = "detail";
+  state.orderFormDirty = false;
+  state.orderFormInitialSnapshot = "";
+  state.orderSaving = false;
   state.orderListScrollY = 0;
   state.activityPage = 1;
   document.getElementById("login-error").textContent = "";
@@ -2437,10 +2541,14 @@ function logout() {
 }
 
 function enterNewOrderMode() {
-  state.orderListScrollY = window.scrollY;
+  if (!confirmDiscardOrderChanges()) return;
+  state.orderBeforeCreateId = state.selectedOrderId;
   state.orderEditorMode = "create";
   state.selectedOrderId = "";
   state.orderFocusMode = true;
+  state.orderDrawerMode = "edit";
+  state.orderFormDirty = false;
+  state.orderFormInitialSnapshot = "";
   setView("orders");
   if (state.data) {
     renderOrders();
@@ -2450,12 +2558,30 @@ function enterNewOrderMode() {
 }
 
 function bindEvents() {
-  document.querySelectorAll(".nav-item").forEach((item) => item.addEventListener("click", () => setView(item.getAttribute("data-view"))));
-  document.getElementById("refresh-btn").addEventListener("click", loadState);
+  document.querySelectorAll(".nav-item").forEach((item) => item.addEventListener("click", () => {
+    const nextView = item.getAttribute("data-view");
+    if (state.orderFocusMode && nextView !== "orders" && !requestCloseOrderDrawer()) return;
+    setView(nextView);
+  }));
+  document.getElementById("refresh-btn").addEventListener("click", () => {
+    if (!confirmDiscardOrderChanges()) return;
+    loadState();
+  });
   document.getElementById("logout-btn").addEventListener("click", logout);
   document.getElementById("new-order-btn").addEventListener("click", enterNewOrderMode);
-  document.getElementById("back-order-list-btn").addEventListener("click", leaveOrderFocusMode);
-  document.getElementById("close-order-detail-btn").addEventListener("click", leaveOrderFocusMode);
+  document.getElementById("edit-order-btn").addEventListener("click", startOrderEditing);
+  document.getElementById("cancel-order-edit-btn").addEventListener("click", cancelOrderEditing);
+  document.getElementById("cancel-order-footer-btn").addEventListener("click", cancelOrderEditing);
+  document.getElementById("close-order-detail-btn").addEventListener("click", requestCloseOrderDrawer);
+  document.getElementById("order-detail-backdrop").addEventListener("click", requestCloseOrderDrawer);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.orderFocusMode) requestCloseOrderDrawer();
+  });
+  window.addEventListener("beforeunload", (event) => {
+    if (!hasUnsavedOrderChanges()) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
   document.getElementById("login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {

@@ -143,20 +143,28 @@
               <div class="order-filter-bar" id="order-status-filters" aria-label="生产视图筛选"></div>
               <div id="order-table"></div>
             </section>
-            <section class="panel order-detail-panel hidden" id="order-detail-panel">
+            <button class="order-drawer-backdrop hidden" id="order-detail-backdrop" type="button" aria-label="关闭工单详情"></button>
+            <aside class="order-detail-panel order-detail-drawer hidden" id="order-detail-panel" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="order-editor-title">
               <div class="panel-head order-detail-toolbar">
                 <div class="order-detail-heading">
-                  <button class="ghost-btn slim-btn" id="back-order-list-btn" type="button">← 返回工单列表</button>
+                  <span class="drawer-eyebrow" id="order-drawer-mode-label">工单详情</span>
                   <h2 id="order-editor-title">工单详情</h2>
                 </div>
                 <div class="panel-actions">
-                  <span class="badge">当前选中</span>
-                  <button class="ghost-btn slim-btn" id="new-order-inline-btn" type="button">新建生产单</button>
+                  <span class="status pending" id="order-drawer-status">当前状态</span>
+                  <button class="ghost-btn slim-btn" id="edit-order-btn" type="button">编辑工单</button>
+                  <button class="ghost-btn slim-btn hidden" id="cancel-order-edit-btn" type="button">取消编辑</button>
                   <button class="icon-btn" id="close-order-detail-btn" type="button" aria-label="关闭工单详情" title="关闭工单详情">×</button>
                 </div>
               </div>
-              <div id="order-detail"></div>
-            </section>
+              <div class="order-drawer-scroll" id="order-drawer-scroll">
+                <div class="order-drawer-content" id="order-detail"></div>
+              </div>
+              <div class="order-drawer-footer hidden" id="order-drawer-footer">
+                <button class="ghost-btn" id="cancel-order-footer-btn" type="button">取消</button>
+                <button class="primary-btn" id="order-save-btn" type="submit" form="order-form">保存工单</button>
+              </div>
+            </aside>
           </div>
         </section>
 
