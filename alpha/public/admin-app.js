@@ -32,6 +32,10 @@ const orderFilterDefinitions = [
   { key: "risk", label: "异常 / 风险" },
 ];
 const activityPageSize = 5;
+const orderPageSize = 3;
+const batchPageSize = 5;
+const movementPageSize = 4;
+const AUTO_REFRESH_INTERVAL_MS = 5000;
 
 const state = {
   currentView: "dashboard",
@@ -57,11 +61,70 @@ const state = {
   orderListScrollY: 0,
   orderBeforeCreateId: "",
   activityPage: 1,
+  orderPage: 1,
+  batchPage: 1,
+  movementPage: 1,
   orderFilter: "all",
   materialFilter: "all",
+  batchFilter: "all",
+  materialDrawerMode: "",
+  materialDrawerDirty: false,
+  materialDrawerInitialSnapshot: "",
+  materialDrawerSaving: false,
+  materialDrawerMaterialCode: "",
+  materialMovementDirty: false,
+  materialItemEditDirty: false,
+  workOrderIssueDirty: false,
+  autoRefreshTimer: null,
+  isAutoRefreshing: false,
+  pendingAutoRefresh: false,
+  lastUpdatedAt: null,
+  autoRefreshFailed: false,
+  movementNewHint: false,
+  batchPinnedKey: "",
+  deepLinkApplied: false,
+  interactionPauseUntil: 0,
   currentUser: null,
   data: null,
 };
+
+function getPaginationModel(totalItems, pageSize, requestedPage) {
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const page = Math.min(Math.max(1, Number(requestedPage || 1)), totalPages);
+  const start = (page - 1) * pageSize;
+  const pages = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, index) => index + 1)
+    : Array.from(new Set([1, page - 1, page, page + 1, totalPages].filter((item) => item >= 1 && item <= totalPages))).sort((a, b) => a - b);
+  return { page, totalPages, start, end: start + pageSize, pages, visible: totalItems > pageSize };
+}
+
+function renderPaginationHtml(key, totalItems, model) {
+  if (!model.visible) return "";
+  let previous = 0;
+  const pageButtons = model.pages.map((page) => {
+    const gap = previous && page - previous > 1 ? '<span class="pagination-ellipsis">…</span>' : "";
+    previous = page;
+    return `${gap}<button class="pagination-page ${page === model.page ? "active" : ""}" type="button" data-pagination-key="${key}" data-page="${page}" aria-label="第 ${page} 页">${page}</button>`;
+  }).join("");
+  return `
+    <div class="light-pagination" data-pagination="${key}">
+      <span>共 ${totalItems} 条</span>
+      <span>第 ${model.page} / ${model.totalPages} 页</span>
+      <button class="ghost-btn slim-btn" type="button" data-pagination-key="${key}" data-page="${model.page - 1}" ${model.page <= 1 ? "disabled" : ""}>上一页</button>
+      <div class="pagination-pages">${pageButtons}</div>
+      <button class="ghost-btn slim-btn" type="button" data-pagination-key="${key}" data-page="${model.page + 1}" ${model.page >= model.totalPages ? "disabled" : ""}>下一页</button>
+    </div>
+  `;
+}
+
+function bindPagination(root, key, onPage) {
+  root?.querySelectorAll(`[data-pagination-key="${key}"]`).forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.disabled) return;
+      onPage(Number(button.getAttribute("data-page") || 1));
+    });
+  });
+}
 
 const views = {
   dashboard: { title: "总览", subtitle: "先把样品、生产单、批次物料和每一步进度抓在手里。" },
@@ -698,6 +761,31 @@ function getFilteredMaterialItems() {
   return getMaterialItems().filter((item) => matchesMaterialFilter(item, state.materialFilter));
 }
 
+function matchesBatchFilter(batch, filterKey = state.batchFilter) {
+  if (filterKey === "all") return true;
+  const status = batch.batchStatus || getBatchStatus(batch);
+  const material = getMaterialItems().find((item) => item.code === batch.materialCode);
+  if (filterKey === "low") return status === "低库存" || (Number(batch.stockQty || 0) > 0 && Number(batch.stockQty || 0) <= Number(material?.safetyQty || 0));
+  if (filterKey === "soon") return status === "即将过期";
+  if (filterKey === "expired") return status === "已过期";
+  if (filterKey === "used-up") return status === "已用完" || Number(batch.stockQty || 0) <= 0;
+  return true;
+}
+
+function getSelectedBatchMovements(data = state.data, selectedKey = state.selectedMaterialKey) {
+  const batch = (data?.materialBatches || []).find((item) => materialKey(item) === selectedKey);
+  if (!batch) return [];
+  return (data?.stockMovements || [])
+    .filter((item) => item.materialCode === batch.materialCode && item.batchNo === batch.batchNo)
+    .slice()
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+
+function movementSignature(data = state.data) {
+  const first = getSelectedBatchMovements(data)[0];
+  return first ? `${first.id || ""}|${first.createdAt || ""}` : "";
+}
+
 function exportMaterialItemsCsv() {
   const rows = getFilteredMaterialItems().map((item) => {
     const summary = getMaterialSummary(item.code);
@@ -717,9 +805,9 @@ function exportMaterialItemsCsv() {
 }
 
 function exportMaterialBatchesCsv() {
-  const materialCodes = new Set(getFilteredMaterialItems().map((item) => item.code));
+  const selectedMaterial = getSelectedMaterialItem();
   const rows = getMaterialBatches()
-    .filter((batch) => materialCodes.has(batch.materialCode))
+    .filter((batch) => selectedMaterial && batch.materialCode === selectedMaterial.code && matchesBatchFilter(batch))
     .map((batch) => {
       const material = getMaterialItems().find((item) => item.code === batch.materialCode) || {};
       return [
@@ -744,9 +832,7 @@ function exportMaterialBatchesCsv() {
 }
 
 function exportStockMovementsCsv() {
-  const materialCodes = new Set(getFilteredMaterialItems().map((item) => item.code));
-  const rows = (state.data?.stockMovements || [])
-    .filter((item) => materialCodes.has(item.materialCode))
+  const rows = getSelectedBatchMovements()
     .map((item) => {
       const material = getMaterialItems().find((entry) => entry.code === item.materialCode) || {};
       return [
@@ -1341,6 +1427,7 @@ function renderWorkOrderStatusFilters() {
   root.querySelectorAll("[data-order-filter]").forEach((button) => {
     button.addEventListener("click", () => {
       state.orderFilter = button.getAttribute("data-order-filter") || "all";
+      state.orderPage = 1;
       renderOrders();
     });
   });
@@ -1399,6 +1486,7 @@ function leaveOrderFocusMode() {
   const wasCreating = state.orderEditorMode === "create";
   state.orderFocusMode = false;
   state.workOrderIssueFormOpen = false;
+  state.workOrderIssueDirty = false;
   state.orderDrawerMode = "detail";
   state.orderFormDirty = false;
   state.orderFormInitialSnapshot = "";
@@ -1440,16 +1528,20 @@ function cancelOrderEditing() {
   state.orderFormDirty = false;
   state.orderFormInitialSnapshot = "";
   renderOrderDetail();
+  if (state.pendingAutoRefresh) runAutoRefresh();
 }
 
 function renderOrders() {
   updateOrderWorkspaceVisibility();
   renderWorkOrderStatusFilters();
   const filteredOrders = state.data.workOrders.filter((order) => matchesOrderFilter(order, state.orderFilter));
+  const pagination = getPaginationModel(filteredOrders.length, orderPageSize, state.orderPage);
+  state.orderPage = pagination.page;
+  const visibleOrders = filteredOrders.slice(pagination.start, pagination.end);
   document.getElementById("order-table").innerHTML = filteredOrders.length
     ? `
       <div class="order-execution-list">
-        ${filteredOrders
+        ${visibleOrders
           .map((order) => {
             const quality = getWorkOrderQualitySummary(order);
             const progress = getProcessProgressSummary(order);
@@ -1491,6 +1583,7 @@ function renderOrders() {
           })
           .join("")}
       </div>
+      ${renderPaginationHtml("orders", filteredOrders.length, pagination)}
     `
     : `<div class="empty-state">当前筛选下没有工单。</div>`;
 
@@ -1507,6 +1600,11 @@ function renderOrders() {
       renderOrderDetail();
       focusOrderDetail();
     });
+  });
+  bindPagination(document.getElementById("order-table"), "orders", (page) => {
+    state.orderPage = page;
+    renderOrders();
+    document.getElementById("order-list-panel")?.scrollIntoView({ block: "start", behavior: "auto" });
   });
 }
 
@@ -1769,8 +1867,10 @@ function renderOrderDetail() {
   if (openWorkOrderIssueButton && order) {
     openWorkOrderIssueButton.addEventListener("click", () => {
       state.workOrderIssueFormOpen = true;
+      state.workOrderIssueDirty = false;
       state.workOrderIssueDraft = { materialCode: "", batchNo: "", qty: "1" };
       renderOrderDetail();
+      if (state.pendingAutoRefresh) runAutoRefresh();
     });
   }
 
@@ -1779,6 +1879,8 @@ function renderOrderDetail() {
     const materialSelect = document.getElementById("work-order-issue-material");
     const batchSelect = document.getElementById("work-order-issue-batch");
     const qtyInput = document.getElementById("work-order-issue-qty");
+    workOrderIssueForm.addEventListener("input", () => { state.workOrderIssueDirty = true; });
+    workOrderIssueForm.addEventListener("change", () => { state.workOrderIssueDirty = true; });
 
     materialSelect?.addEventListener("change", () => {
       state.workOrderIssueDraft = {
@@ -1807,6 +1909,7 @@ function renderOrderDetail() {
 
     document.getElementById("cancel-work-order-issue-btn")?.addEventListener("click", () => {
       state.workOrderIssueFormOpen = false;
+      state.workOrderIssueDirty = false;
       state.workOrderIssueDraft = { materialCode: "", batchNo: "", qty: "1" };
       renderOrderDetail();
     });
@@ -1843,6 +1946,7 @@ function renderOrderDetail() {
         });
         state.data = result.state;
         state.workOrderIssueFormOpen = false;
+        state.workOrderIssueDirty = false;
         state.workOrderIssueDraft = { materialCode: "", batchNo: "", qty: "1" };
         syncSelections();
         renderAll();
@@ -1858,11 +1962,176 @@ function renderOrderDetail() {
   }
 }
 
+function hasUnsavedMaterialDrawerChanges() {
+  return state.materialDrawerDirty && Boolean(state.materialDrawerMode);
+}
+
+function confirmDiscardMaterialDrawerChanges() {
+  if (state.materialDrawerSaving) {
+    showToast("正在保存，请稍候");
+    return false;
+  }
+  return !hasUnsavedMaterialDrawerChanges() || window.confirm("当前表单有未保存修改，确认放弃这些修改吗？");
+}
+
+function closeMaterialDrawer({ force = false } = {}) {
+  if (!force && !confirmDiscardMaterialDrawerChanges()) return false;
+  state.materialDrawerMode = "";
+  state.materialDrawerDirty = false;
+  state.materialDrawerInitialSnapshot = "";
+  state.materialDrawerSaving = false;
+  document.getElementById("material-drawer")?.classList.add("hidden");
+  document.getElementById("material-drawer")?.setAttribute("aria-hidden", "true");
+  document.getElementById("material-drawer-backdrop")?.classList.add("hidden");
+  unlockOrderListScroll();
+  if (state.pendingAutoRefresh && !force) {
+    state.pendingAutoRefresh = false;
+    loadState({ source: "auto", force: true });
+  }
+  if (force) state.pendingAutoRefresh = false;
+  return true;
+}
+
+function renderMaterialDrawer() {
+  const drawer = document.getElementById("material-drawer");
+  const content = document.getElementById("material-drawer-content");
+  const title = document.getElementById("material-drawer-title");
+  const eyebrow = document.getElementById("material-drawer-eyebrow");
+  const saveButton = document.getElementById("save-material-drawer-btn");
+  const mode = state.materialDrawerMode;
+  const material = getMaterialItems().find((item) => item.code === state.materialDrawerMaterialCode) || getSelectedMaterialItem();
+  if (!mode) return;
+  const isBatch = mode === "batch";
+  drawer.classList.toggle("batch-drawer", isBatch);
+  title.textContent = isBatch ? "新建批次并入库" : "新建物料档案";
+  eyebrow.textContent = isBatch ? "批次入库" : "物料档案";
+  saveButton.textContent = state.materialDrawerSaving ? "正在保存..." : isBatch ? "创建批次并入库" : "保存物料档案";
+  saveButton.disabled = state.materialDrawerSaving;
+  saveButton.setAttribute("form", isBatch ? "material-drawer-batch-form" : "material-drawer-item-form");
+  const now = new Date();
+  const todayValue = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const expiry = new Date(now);
+  expiry.setDate(expiry.getDate() + 30);
+  const expiryValue = `${expiry.getFullYear()}-${String(expiry.getMonth() + 1).padStart(2, "0")}-${String(expiry.getDate()).padStart(2, "0")}`;
+  content.innerHTML = isBatch
+    ? `
+      <form class="editor-form business-drawer-form" id="material-drawer-batch-form" autocomplete="off">
+        <div class="drawer-current-material"><span>当前物料</span><strong>${escapeHtml(material?.code || "-")} · ${escapeHtml(material?.name || "未选择物料")}</strong></div>
+        <input name="materialCode" type="hidden" value="${escapeHtml(material?.code || "")}" />
+        <div class="editor-grid two">
+          <label>批次号<input name="batchNoDraft" autocomplete="new-password" placeholder="例如：PU-202607-001" required /></label>
+          <label>入库数量（单位：${escapeHtml(materialUnitLabel(material))}）<input name="initialQty" type="number" min="0.001" step="any" value="1" required /></label>
+          <label>来料日期<input name="receivedDate" type="date" value="${todayValue}" required /></label>
+          <label>保质期截止日期<input name="expiryDate" type="date" value="${expiryValue}" required /></label>
+          <label>库位<input name="locationDraft" autocomplete="new-password" value="${escapeHtml(material?.defaultLocation || "")}" required /></label>
+          <label>供应商<input name="supplierDraft" autocomplete="new-password" value="${escapeHtml(material?.supplier || "")}" placeholder="可选" /></label>
+        </div>
+        <label>备注<textarea name="batchNoteDraft" autocomplete="new-password" rows="3" placeholder="可选，例如采购到货"></textarea></label>
+      </form>
+    `
+    : `
+      <form class="editor-form business-drawer-form" id="material-drawer-item-form" autocomplete="off">
+        <div class="editor-grid two">
+          <label>物料编号<input name="code" placeholder="例如：RM-PU-001" required /></label>
+          <label>物料名称<input name="name" placeholder="例如：PU 原材料" required /></label>
+          <label>规格<input name="spec" placeholder="例如：低温热塑" /></label>
+          <label>计量单位<input name="unit" value="kg" list="drawer-material-unit-options" placeholder="kg、张、片、桶、个" required /></label>
+          <label>安全库存<input name="safetyQty" type="number" min="0" step="any" value="0" required /></label>
+          <label>默认库位<input name="defaultLocation" placeholder="例如：A-01" /></label>
+          <label>供应商<input name="supplier" placeholder="可选" /></label>
+          <label>状态<select name="status"><option value="启用">启用</option><option value="停用">停用</option></select></label>
+        </div>
+        <datalist id="drawer-material-unit-options"><option value="kg"></option><option value="张"></option><option value="片"></option><option value="桶"></option><option value="个"></option><option value="双"></option><option value="米"></option></datalist>
+      </form>
+    `;
+  const form = content.querySelector("form");
+  state.materialDrawerInitialSnapshot = snapshotOrderForm(form);
+  state.materialDrawerDirty = false;
+  const updateDirty = () => {
+    state.materialDrawerDirty = snapshotOrderForm(form) !== state.materialDrawerInitialSnapshot;
+  };
+  form.addEventListener("input", updateDirty);
+  form.addEventListener("change", updateDirty);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.materialDrawerSaving) return;
+    const formData = new FormData(form);
+    state.materialDrawerSaving = true;
+    saveButton.disabled = true;
+    saveButton.textContent = "正在保存...";
+    try {
+      if (isBatch) {
+        const result = await api("/api/material-batches", { method: "POST", body: JSON.stringify({
+          materialCode: formData.get("materialCode"), batchNo: formData.get("batchNoDraft"), initialQty: Number(formData.get("initialQty") || 0),
+          location: formData.get("locationDraft"), receivedDate: formData.get("receivedDate"), expiryDate: formData.get("expiryDate"),
+          supplier: formData.get("supplierDraft"), note: formData.get("batchNoteDraft"),
+        }) });
+        state.data = result.state;
+        state.selectedMaterialCode = result.batch.materialCode;
+        state.selectedMaterialKey = materialKey(result.batch);
+        state.batchPinnedKey = state.selectedMaterialKey;
+        state.batchPage = 1;
+        state.movementPage = 1;
+        state.movementNewHint = false;
+        closeMaterialDrawer({ force: true });
+        syncSelections();
+        renderAll();
+        showToast("批次已创建并入库");
+      } else {
+        const payload = { code: String(formData.get("code") || "").trim(), name: formData.get("name"), spec: formData.get("spec"), unit: formData.get("unit") || "kg", safetyQty: Number(formData.get("safetyQty") || 0), defaultLocation: formData.get("defaultLocation"), supplier: formData.get("supplier"), status: formData.get("status") };
+        if (isNumericText(payload.unit)) throw new Error("计量单位请填 kg、张、片等文字");
+        const result = await api("/api/material-items/save", { method: "POST", body: JSON.stringify(payload) });
+        state.data = result.state;
+        state.selectedMaterialCode = result.material.code;
+        state.selectedMaterialKey = "";
+        state.batchPage = 1;
+        state.movementPage = 1;
+        closeMaterialDrawer({ force: true });
+        syncSelections();
+        renderAll();
+        showToast("物料档案已创建");
+      }
+    } catch (error) {
+      state.materialDrawerSaving = false;
+      saveButton.disabled = false;
+      saveButton.textContent = isBatch ? "创建批次并入库" : "保存物料档案";
+      showToast(error.message);
+    }
+  });
+  disableBrowserSuggestions();
+}
+
+function openMaterialDrawer(mode) {
+  if (state.orderFocusMode && !requestCloseOrderDrawer()) return;
+  if (state.materialDrawerMode && !closeMaterialDrawer()) return;
+  if (mode === "batch" && !getSelectedMaterialItem()) {
+    showToast("请先选择物料档案");
+    return;
+  }
+  state.materialDrawerMode = mode;
+  state.materialDrawerMaterialCode = state.selectedMaterialCode;
+  state.materialDrawerDirty = false;
+  state.materialDrawerSaving = false;
+  document.getElementById("material-drawer")?.classList.remove("hidden");
+  document.getElementById("material-drawer")?.setAttribute("aria-hidden", "false");
+  document.getElementById("material-drawer-backdrop")?.classList.remove("hidden");
+  renderMaterialDrawer();
+  lockOrderListScroll();
+  document.getElementById("close-material-drawer-btn")?.focus({ preventScroll: true });
+}
+
 function renderMaterials() {
   const materialItems = getMaterialItems();
   const selectedMaterialItem = getSelectedMaterialItem();
   const materialBatches = getMaterialBatches();
   const selectedBatches = selectedMaterialItem ? materialBatches.filter((item) => item.materialCode === selectedMaterialItem.code) : [];
+  const filteredSelectedBatches = selectedBatches.filter((item) => matchesBatchFilter(item));
+  if (state.batchPinnedKey) {
+    filteredSelectedBatches.sort((a, b) => Number(materialKey(b) === state.batchPinnedKey) - Number(materialKey(a) === state.batchPinnedKey));
+  }
+  const batchPagination = getPaginationModel(filteredSelectedBatches.length, batchPageSize, state.batchPage);
+  state.batchPage = batchPagination.page;
+  const visibleBatches = filteredSelectedBatches.slice(batchPagination.start, batchPagination.end);
   const selectedBatch = getSelectedMaterial() || selectedBatches[0] || null;
   const selectedSummary = selectedMaterialItem ? getMaterialSummary(selectedMaterialItem.code) : null;
   const selectedUnit = materialUnitLabel(selectedMaterialItem);
@@ -1878,9 +2147,10 @@ function renderMaterials() {
   const localOnlyNote = /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(window.location.origin)
     ? '<div class="item-note">当前是 localhost，本机点链接没问题，但真机扫码还需要部署上线，或者改成你电脑的局域网 IP 地址。</div>'
     : '';
-  const movementRows = (state.data.stockMovements || [])
-    .filter((item) => !selectedBatch || (item.materialCode === selectedBatch.materialCode && item.batchNo === selectedBatch.batchNo))
-    .slice(0, 8);
+  const allMovementRows = getSelectedBatchMovements();
+  const movementPagination = getPaginationModel(allMovementRows.length, movementPageSize, state.movementPage);
+  state.movementPage = movementPagination.page;
+  const movementRows = allMovementRows.slice(movementPagination.start, movementPagination.end);
 
   document.getElementById("material-table").innerHTML = `
     <div class="panel-grid two-up material-layout">
@@ -1936,15 +2206,21 @@ function renderMaterials() {
           <div class="panel-head">
             <h2>批次库存</h2>
             <div class="panel-actions">
-              <span class="badge">${selectedBatches.length} 个批次</span>
+              <span class="badge">${filteredSelectedBatches.length}/${selectedBatches.length} 个批次</span>
               <button class="ghost-btn slim-btn" type="button" id="export-material-batches-btn">导出批次库存</button>
+              <button class="primary-btn slim-btn" type="button" id="new-material-batch-btn" ${selectedMaterialItem ? "" : "disabled"}>+ 新建批次 / 入库</button>
             </div>
+          </div>
+          <div class="filter-row batch-filter-row" id="batch-filter-row">
+            ${materialFilterDefinitions
+              .map((item) => `<button class="ghost-btn slim-btn ${state.batchFilter === item.key ? "active-filter" : ""}" type="button" data-batch-filter="${escapeHtml(item.key)}">${escapeHtml(item.label)}</button>`)
+              .join("")}
           </div>
           <div class="table">
             <div class="table-head material-grid">
               <div>批次号</div><div>库存</div><div>初始</div><div>库位</div><div>来料</div><div>到期 / 状态</div><div>操作</div>
             </div>
-            ${selectedBatches
+            ${visibleBatches
               .map((item) => {
                 const status = item.batchStatus || getBatchStatus(item);
                 const days = item.daysUntilExpiry ?? daysUntilExpiry(item.expiryDate);
@@ -1967,8 +2243,9 @@ function renderMaterials() {
                   </div>
                 `;
               })
-              .join("") || '<div class="empty-state">当前物料还没有批次。</div>'}
+              .join("") || '<div class="empty-state">当前物料在此筛选下没有批次。</div>'}
           </div>
+          ${renderPaginationHtml("batches", filteredSelectedBatches.length, batchPagination)}
         </div>
 
         <div class="detail-block">
@@ -1976,6 +2253,7 @@ function renderMaterials() {
             <h2>出入库流水</h2>
             <div class="panel-actions">
               <span class="badge">${selectedBatch ? escapeHtml(selectedBatch.batchNo) : "批次记录"}</span>
+              ${state.movementNewHint ? '<span class="inline-update-hint">有新的出入库记录</span>' : ""}
               <button class="ghost-btn slim-btn" type="button" id="export-stock-movements-btn">导出出入库流水</button>
             </div>
           </div>
@@ -2015,6 +2293,7 @@ function renderMaterials() {
                 : '<div class="empty-state">当前批次还没有出入库记录。</div>'
             }
           </div>
+          ${renderPaginationHtml("movements", allMovementRows.length, movementPagination)}
         </div>
       </section>
 
@@ -2053,7 +2332,7 @@ function renderMaterials() {
 
         <div class="detail-block">
           <div class="panel-head">
-            <h2>新建批次 / 入库</h2>
+            <h2>当前批次与出入库</h2>
             <span class="badge ${selectedSummary?.lowStock ? "warn" : ""}">
               ${selectedSummary ? `${selectedSummary.totalStockQty} ${escapeHtml(selectedUnit)}` : "未选择物料"}
             </span>
@@ -2062,27 +2341,6 @@ function renderMaterials() {
             selectedMaterialItem
               ? `
                 <div class="detail-card">
-                  <form class="editor-form" id="material-batch-form">
-                    <div class="editor-grid two">
-                      <label>
-                        物料
-                        <select name="materialCode">
-                          ${materialItems.map((item) => `<option value="${escapeHtml(item.code)}" ${item.code === selectedMaterialItem.code ? "selected" : ""}>${escapeHtml(item.code)} / ${escapeHtml(item.name)}</option>`).join("")}
-                        </select>
-                      </label>
-                      <label>批次号<input name="batchNoDraft" autocomplete="new-password" placeholder="例如：PU-202607-001" required /></label>
-                      <label>入库数量（单位：${escapeHtml(selectedUnit)}）<input name="initialQty" type="number" min="1" step="1" value="1" required /></label>
-                      <label>库位<input name="locationDraft" autocomplete="new-password" value="${escapeHtml(selectedMaterialItem.defaultLocation || "")}" required /></label>
-                      <label>来料日期<input name="receivedDate" type="date" value="${todayValue}" required /></label>
-                      <label>保质期截止日期<input name="expiryDate" type="date" value="${defaultExpiryValue}" required /></label>
-                      <label>供应商<input name="supplierDraft" autocomplete="new-password" value="${escapeHtml(selectedMaterialItem.supplier || "")}" placeholder="可选" /></label>
-                      <label>备注<input name="batchNoteDraft" autocomplete="new-password" placeholder="可选，例如采购到货" /></label>
-                    </div>
-                    <div class="editor-actions">
-                      <button class="primary-btn" type="submit">创建批次并入库</button>
-                    </div>
-                  </form>
-
                   <div class="detail-block">
                     <div class="detail-title">当前批次</div>
                     ${
@@ -2157,6 +2415,10 @@ function renderMaterials() {
       state.selectedMaterialCode = row.getAttribute("data-material-code");
       const firstBatch = getMaterialBatches().find((item) => item.materialCode === state.selectedMaterialCode);
       state.selectedMaterialKey = materialKey(firstBatch);
+      state.batchPage = 1;
+      state.movementPage = 1;
+      state.movementNewHint = false;
+      state.batchPinnedKey = "";
       renderMaterials();
     });
   });
@@ -2168,26 +2430,44 @@ function renderMaterials() {
     });
   });
 
+  document.querySelectorAll("[data-batch-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.batchFilter = button.getAttribute("data-batch-filter") || "all";
+      state.batchPage = 1;
+      state.batchPinnedKey = "";
+      renderMaterials();
+    });
+  });
+
   document.getElementById("export-material-items-btn")?.addEventListener("click", exportMaterialItemsCsv);
   document.getElementById("export-material-batches-btn")?.addEventListener("click", exportMaterialBatchesCsv);
   document.getElementById("export-stock-movements-btn")?.addEventListener("click", exportStockMovementsCsv);
 
   const newMaterialItemButton = document.getElementById("new-material-item-btn");
   if (newMaterialItemButton) {
-    newMaterialItemButton.addEventListener("click", () => {
-      state.materialEditorMode = "create";
-      state.selectedMaterialCode = "";
-      state.selectedMaterialKey = "";
-      renderMaterials();
-    });
+    newMaterialItemButton.addEventListener("click", () => openMaterialDrawer("material"));
   }
+  document.getElementById("new-material-batch-btn")?.addEventListener("click", () => openMaterialDrawer("batch"));
 
   document.querySelectorAll("[data-material-key]").forEach((row) => {
     row.addEventListener("click", () => {
       state.materialEditorMode = "edit";
       state.selectedMaterialKey = row.getAttribute("data-material-key");
+      state.batchPinnedKey = "";
+      state.movementPage = 1;
+      state.movementNewHint = false;
       renderMaterials();
     });
+  });
+  bindPagination(document.getElementById("material-table"), "batches", (page) => {
+    state.batchPage = page;
+    state.batchPinnedKey = "";
+    renderMaterials();
+  });
+  bindPagination(document.getElementById("material-table"), "movements", (page) => {
+    state.movementPage = page;
+    state.movementNewHint = false;
+    renderMaterials();
   });
 
   document.querySelectorAll("[data-row-action]").forEach((action) => {
@@ -2246,6 +2526,8 @@ function renderMaterials() {
           body: JSON.stringify({ correctionReason }),
         });
         state.data = result.state;
+        state.movementPage = 1;
+        state.movementNewHint = false;
         syncSelections();
         renderAll();
         showToast("冲正成功，库存已更新");
@@ -2273,6 +2555,13 @@ function renderMaterials() {
 
   const materialItemForm = document.getElementById("material-item-form");
   if (materialItemForm) {
+    const initialMaterialSnapshot = snapshotOrderForm(materialItemForm);
+    state.materialItemEditDirty = false;
+    const updateMaterialDirty = () => {
+      state.materialItemEditDirty = snapshotOrderForm(materialItemForm) !== initialMaterialSnapshot;
+    };
+    materialItemForm.addEventListener("input", updateMaterialDirty);
+    materialItemForm.addEventListener("change", updateMaterialDirty);
     materialItemForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formData = new FormData(materialItemForm);
@@ -2295,6 +2584,7 @@ function renderMaterials() {
         state.selectedMaterialCode = result.material.code;
         state.selectedMaterialKey = "";
         state.materialEditorMode = "edit";
+        state.materialItemEditDirty = false;
         syncSelections();
         renderAll();
         showToast(isUpdate ? "物料档案已更新" : "物料档案已创建");
@@ -2306,47 +2596,18 @@ function renderMaterials() {
 
   const newMaterialDraftButton = document.getElementById("new-material-draft-btn");
   if (newMaterialDraftButton && materialItemForm) {
-    newMaterialDraftButton.addEventListener("click", () => {
-      state.materialEditorMode = "create";
-      state.selectedMaterialCode = "";
-      state.selectedMaterialKey = "";
-      renderMaterials();
-    });
-  }
-
-  const materialBatchForm = document.getElementById("material-batch-form");
-  if (materialBatchForm) {
-    materialBatchForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const formData = new FormData(materialBatchForm);
-      try {
-        const result = await api("/api/material-batches", {
-          method: "POST",
-          body: JSON.stringify({
-            materialCode: formData.get("materialCode"),
-            batchNo: formData.get("batchNoDraft"),
-            initialQty: Number(formData.get("initialQty") || 0),
-            location: formData.get("locationDraft"),
-            receivedDate: formData.get("receivedDate"),
-            expiryDate: formData.get("expiryDate"),
-            supplier: formData.get("supplierDraft"),
-            note: formData.get("batchNoteDraft"),
-          }),
-        });
-        state.data = result.state;
-        state.selectedMaterialCode = result.batch.materialCode;
-        state.selectedMaterialKey = materialKey(result.batch);
-        syncSelections();
-        renderAll();
-        showToast("批次已创建并入库");
-      } catch (error) {
-        showToast(error.message);
-      }
-    });
+    newMaterialDraftButton.addEventListener("click", () => openMaterialDrawer("material"));
   }
 
   const movementForm = document.getElementById("material-movement-form");
   if (movementForm && selectedBatch) {
+    const initialMovementSnapshot = snapshotOrderForm(movementForm);
+    state.materialMovementDirty = false;
+    const updateMovementDirty = () => {
+      state.materialMovementDirty = snapshotOrderForm(movementForm) !== initialMovementSnapshot;
+    };
+    movementForm.addEventListener("input", updateMovementDirty);
+    movementForm.addEventListener("change", updateMovementDirty);
     const refreshFefoPreview = () => {
       const preview = document.getElementById("fefo-plan-preview");
       const reasonField = document.getElementById("fefo-override-field");
@@ -2395,6 +2656,9 @@ function renderMaterials() {
         state.data = result.state;
         state.selectedMaterialCode = selectedBatch.materialCode;
         state.selectedMaterialKey = materialKey(selectedBatch);
+        state.materialMovementDirty = false;
+        state.movementPage = 1;
+        state.movementNewHint = false;
         syncSelections();
         renderAll();
         const latest = result.state.materialBatches.find((item) => item.materialCode === selectedBatch.materialCode && item.batchNo === selectedBatch.batchNo);
@@ -2503,11 +2767,99 @@ function applyAdminDeepLinkFromUrlQuery() {
   }
 }
 
-async function loadState() {
-  state.data = await api("/api/state");
-  applyAdminDeepLinkFromUrlQuery();
-  renderAll();
-  if (state.orderFocusMode) lockOrderListScroll();
+function setAutoRefreshStatus(message, tone = "") {
+  const status = document.getElementById("auto-refresh-status");
+  if (!status) return;
+  status.textContent = message;
+  status.className = `auto-refresh-status ${tone}`.trim();
+}
+
+function hasProtectedEditingState() {
+  const activeForm = document.activeElement?.closest?.("form");
+  return Boolean(
+    hasUnsavedOrderChanges()
+    || state.orderDrawerMode === "edit"
+    || state.orderEditorMode === "create"
+    || state.materialDrawerMode
+    || state.materialItemEditDirty
+    || state.materialMovementDirty
+    || state.workOrderIssueFormOpen
+    || state.workOrderIssueDirty
+    || activeForm
+  );
+}
+
+function hasUnsavedInlineChanges() {
+  return state.materialItemEditDirty || state.materialMovementDirty || state.workOrderIssueDirty;
+}
+
+function confirmDiscardInlineChanges() {
+  return !hasUnsavedInlineChanges() || window.confirm("当前页面有未保存修改，确认放弃这些修改吗？");
+}
+
+function formatRefreshTime(date = new Date()) {
+  return date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+async function loadState({ source = "manual", force = false } = {}) {
+  const isAuto = source === "auto";
+  if (state.isAutoRefreshing) return false;
+  if (isAuto && !force && hasProtectedEditingState()) {
+    state.pendingAutoRefresh = true;
+    setAutoRefreshStatus("检测到新数据，完成当前操作后将自动刷新", "pending");
+    return false;
+  }
+  const scrollY = window.scrollY;
+  const previousMovementSignature = movementSignature(state.data);
+  state.isAutoRefreshing = true;
+  try {
+    const nextData = await api("/api/state");
+    if (isAuto && !force && (Date.now() < state.interactionPauseUntil || hasProtectedEditingState())) {
+      state.pendingAutoRefresh = true;
+      setAutoRefreshStatus("检测到新数据，完成当前操作后将自动刷新", "pending");
+      return false;
+    }
+    const incomingMovementSignature = movementSignature(nextData);
+    if (isAuto && state.movementPage > 1 && previousMovementSignature && incomingMovementSignature !== previousMovementSignature) {
+      state.movementNewHint = true;
+    }
+    state.data = nextData;
+    if (!state.deepLinkApplied) {
+      applyAdminDeepLinkFromUrlQuery();
+      state.deepLinkApplied = true;
+    }
+    renderAll();
+    if (state.orderFocusMode) lockOrderListScroll();
+    if (!state.orderScrollLocked) window.requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "auto" }));
+    state.lastUpdatedAt = new Date();
+    state.autoRefreshFailed = false;
+    state.pendingAutoRefresh = false;
+    setAutoRefreshStatus(`最后更新：${formatRefreshTime(state.lastUpdatedAt)}`);
+    return true;
+  } catch (error) {
+    state.autoRefreshFailed = true;
+    setAutoRefreshStatus("自动更新暂时失败", "error");
+    if (!isAuto) throw error;
+    console.warn("Auto refresh failed", error);
+    return false;
+  } finally {
+    state.isAutoRefreshing = false;
+  }
+}
+
+function stopAutoRefresh() {
+  if (state.autoRefreshTimer) window.clearInterval(state.autoRefreshTimer);
+  state.autoRefreshTimer = null;
+}
+
+function runAutoRefresh() {
+  if (!token() || !state.currentUser || document.hidden || Date.now() < state.interactionPauseUntil) return;
+  loadState({ source: "auto" });
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  state.autoRefreshTimer = window.setInterval(runAutoRefresh, AUTO_REFRESH_INTERVAL_MS);
 }
 
 async function loadSession() {
@@ -2516,11 +2868,13 @@ async function loadSession() {
   renderUser();
   if (!ensureManagerSession(result.user)) return;
   await loadState();
+  startAutoRefresh();
 }
 
 function logout() {
-  if (!confirmDiscardOrderChanges()) return;
+  if (!confirmDiscardOrderChanges() || !confirmDiscardMaterialDrawerChanges() || !confirmDiscardInlineChanges()) return;
   unlockOrderListScroll();
+  stopAutoRefresh();
   clearToken();
   state.currentUser = null;
   state.data = null;
@@ -2535,6 +2889,15 @@ function logout() {
   state.orderSaving = false;
   state.orderListScrollY = 0;
   state.activityPage = 1;
+  state.orderPage = 1;
+  state.batchPage = 1;
+  state.movementPage = 1;
+  state.materialDrawerMode = "";
+  state.materialDrawerDirty = false;
+  state.materialMovementDirty = false;
+  state.materialItemEditDirty = false;
+  state.workOrderIssueDirty = false;
+  state.deepLinkApplied = false;
   document.getElementById("login-error").textContent = "";
   renderUser();
   setLoggedIn(false);
@@ -2558,14 +2921,19 @@ function enterNewOrderMode() {
 }
 
 function bindEvents() {
+  document.addEventListener("pointerdown", () => {
+    state.interactionPauseUntil = Date.now() + 1500;
+  }, { passive: true });
   document.querySelectorAll(".nav-item").forEach((item) => item.addEventListener("click", () => {
     const nextView = item.getAttribute("data-view");
+    if (nextView !== state.currentView && !confirmDiscardInlineChanges()) return;
     if (state.orderFocusMode && nextView !== "orders" && !requestCloseOrderDrawer()) return;
+    if (state.materialDrawerMode && nextView !== "materials" && !closeMaterialDrawer()) return;
     setView(nextView);
   }));
   document.getElementById("refresh-btn").addEventListener("click", () => {
-    if (!confirmDiscardOrderChanges()) return;
-    loadState();
+    if (!confirmDiscardOrderChanges() || !confirmDiscardMaterialDrawerChanges() || !confirmDiscardInlineChanges()) return;
+    loadState({ source: "manual", force: true }).catch((error) => showToast(error.message));
   });
   document.getElementById("logout-btn").addEventListener("click", logout);
   document.getElementById("new-order-btn").addEventListener("click", enterNewOrderMode);
@@ -2574,11 +2942,16 @@ function bindEvents() {
   document.getElementById("cancel-order-footer-btn").addEventListener("click", cancelOrderEditing);
   document.getElementById("close-order-detail-btn").addEventListener("click", requestCloseOrderDrawer);
   document.getElementById("order-detail-backdrop").addEventListener("click", requestCloseOrderDrawer);
+  document.getElementById("close-material-drawer-btn").addEventListener("click", () => closeMaterialDrawer());
+  document.getElementById("cancel-material-drawer-btn").addEventListener("click", () => closeMaterialDrawer());
+  document.getElementById("material-drawer-backdrop").addEventListener("click", () => closeMaterialDrawer());
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.orderFocusMode) requestCloseOrderDrawer();
+    if (event.key !== "Escape") return;
+    if (state.materialDrawerMode) closeMaterialDrawer();
+    else if (state.orderFocusMode) requestCloseOrderDrawer();
   });
   window.addEventListener("beforeunload", (event) => {
-    if (!hasUnsavedOrderChanges()) return;
+    if (!hasUnsavedOrderChanges() && !hasUnsavedMaterialDrawerChanges() && !hasUnsavedInlineChanges()) return;
     event.preventDefault();
     event.returnValue = "";
   });
@@ -2599,10 +2972,15 @@ function bindEvents() {
       setLoggedIn(true);
       renderUser();
       await loadState();
+      startAutoRefresh();
     } catch (error) {
       document.getElementById("login-error").textContent = error.message;
     }
   });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) runAutoRefresh();
+  });
+  window.addEventListener("focus", runAutoRefresh);
 }
 
 bindEvents();

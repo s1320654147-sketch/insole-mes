@@ -52,6 +52,7 @@
           <div class="topbar-actions">
             <div class="user-pill" id="current-user">未登录</div>
             <a class="ghost-btn link-btn" href="./mobile.html">手机端预览</a>
+            <span class="auto-refresh-status" id="auto-refresh-status" aria-live="polite">等待自动更新</span>
             <button class="ghost-btn" id="refresh-btn">刷新数据</button>
             <button class="primary-btn" id="new-order-btn" type="button">新建生产单</button>
             <button class="ghost-btn" id="logout-btn" type="button">退出登录</button>
@@ -177,6 +178,24 @@
             <div id="material-table"></div>
           </section>
         </section>
+
+        <button class="order-drawer-backdrop hidden" id="material-drawer-backdrop" type="button" aria-label="关闭物料操作"></button>
+        <aside class="business-drawer hidden" id="material-drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="material-drawer-title">
+          <div class="panel-head business-drawer-head">
+            <div class="order-detail-heading">
+              <span class="drawer-eyebrow" id="material-drawer-eyebrow">物料操作</span>
+              <h2 id="material-drawer-title">新建物料档案</h2>
+            </div>
+            <button class="icon-btn" id="close-material-drawer-btn" type="button" aria-label="关闭物料操作" title="关闭物料操作">×</button>
+          </div>
+          <div class="business-drawer-scroll">
+            <div class="business-drawer-content" id="material-drawer-content"></div>
+          </div>
+          <div class="business-drawer-footer">
+            <button class="ghost-btn" id="cancel-material-drawer-btn" type="button">取消</button>
+            <button class="primary-btn" id="save-material-drawer-btn" type="submit">保存</button>
+          </div>
+        </aside>
 
         <section class="view" id="reporting-view">
           <div class="panel-grid two-up">
