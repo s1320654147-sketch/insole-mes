@@ -680,6 +680,9 @@ function prepareCameraPreview(video, cameraWrap) {
   cameraWrap.classList.remove("hidden", "camera-active");
   cameraWrap.setAttribute("aria-hidden", "false");
   video.hidden = false;
+  ["display", "visibility", "opacity", "width", "height"].forEach((property) => {
+    video.style.removeProperty(property);
+  });
   video.autoplay = true;
   video.playsInline = true;
   video.muted = true;
@@ -851,6 +854,10 @@ async function startCameraScan(target = "batch") {
   try {
     if (requestId !== scanState.requestId) return;
 
+    prepareCameraPreview(video, cameraWrap);
+    await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
+    if (requestId !== scanState.requestId) return;
+
     scanner = new QrScanner(video, handleScannedCode, {
       preferredCamera: "environment",
       maxScansPerSecond: 8,
@@ -859,7 +866,6 @@ async function startCameraScan(target = "batch") {
       onDecodeError: () => {},
     });
     scanState.scanner = scanner;
-    prepareCameraPreview(video, cameraWrap);
     window.requestAnimationFrame(() => cameraWrap.scrollIntoView({ block: "nearest" }));
     await scanner.start();
     if (requestId !== scanState.requestId || scanState.scanner !== scanner) {
