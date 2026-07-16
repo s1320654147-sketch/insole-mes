@@ -670,6 +670,75 @@ function isAbortError(error) {
   return error?.name === "AbortError" || /aborted|aborterror/i.test(String(error?.message || ""));
 }
 
+function createCameraError(name, message) {
+  const error = new Error(message);
+  error.name = name;
+  return error;
+}
+
+function prepareCameraPreview(video, cameraWrap) {
+  cameraWrap.classList.remove("hidden", "camera-active");
+  cameraWrap.setAttribute("aria-hidden", "false");
+  video.hidden = false;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.muted = true;
+  video.setAttribute("autoplay", "");
+  video.setAttribute("playsinline", "");
+  video.setAttribute("webkit-playsinline", "");
+  video.setAttribute("muted", "");
+}
+
+async function waitForCameraPreview(video, timeoutMs = 10000) {
+  const stream = video.srcObject;
+  const liveTrack = stream?.getVideoTracks?.().find((track) => track.readyState === "live");
+  if (!liveTrack) throw createCameraError("NotReadableError", "摄像头没有返回可用视频流");
+
+  if (video.paused) {
+    try {
+      await video.play();
+    } catch (error) {
+      if (!isAbortError(error)) throw error;
+    }
+  }
+
+  if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    await new Promise((resolve, reject) => {
+      let timer = 0;
+      const cleanup = () => {
+        window.clearTimeout(timer);
+        ["loadedmetadata", "loadeddata", "canplay", "playing", "resize"].forEach((eventName) => {
+          video.removeEventListener(eventName, handleReady);
+        });
+        video.removeEventListener("error", handleError);
+      };
+      const handleReady = () => {
+        if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+        cleanup();
+        resolve();
+      };
+      const handleError = () => {
+        cleanup();
+        reject(createCameraError("NotReadableError", "摄像头预览无法播放"));
+      };
+      timer = window.setTimeout(() => {
+        cleanup();
+        reject(createCameraError("NotReadableError", "摄像头预览启动超时"));
+      }, timeoutMs);
+      ["loadedmetadata", "loadeddata", "canplay", "playing", "resize"].forEach((eventName) => {
+        video.addEventListener(eventName, handleReady);
+      });
+      video.addEventListener("error", handleError, { once: true });
+    });
+  }
+
+  if (video.paused) await video.play();
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+  if (!video.videoWidth || !video.videoHeight) {
+    throw createCameraError("NotReadableError", "摄像头没有返回可见画面");
+  }
+}
+
 function stopVideoTracks(video) {
   const stream = video?.srcObject;
   if (stream?.getTracks) stream.getTracks().forEach((track) => track.stop());
@@ -707,6 +776,8 @@ async function stopCameraScan(options = {}) {
   ["workOrder", "batch"].forEach((target) => {
     const { video, cameraWrap } = cameraElements(target);
     cameraWrap.classList.add("hidden");
+    cameraWrap.classList.remove("camera-active");
+    cameraWrap.setAttribute("aria-hidden", "true");
     updateCameraButtons(target, "idle");
     stopVideoTracks(video);
   });
@@ -773,6 +844,8 @@ async function startCameraScan(target = "batch") {
   scanState.target = target;
   updateCameraButtons(target, "starting");
   const { isWorkOrderScan, video, cameraWrap } = cameraElements(target);
+  const startingMessage = "正在启动摄像头，请稍候…";
+  isWorkOrderScan ? setWorkOrderScanStatus(startingMessage) : setScanStatus(startingMessage);
   let scanner = null;
 
   try {
@@ -786,11 +859,15 @@ async function startCameraScan(target = "batch") {
       onDecodeError: () => {},
     });
     scanState.scanner = scanner;
-    cameraWrap.classList.remove("hidden");
+    prepareCameraPreview(video, cameraWrap);
+    window.requestAnimationFrame(() => cameraWrap.scrollIntoView({ block: "nearest" }));
     await scanner.start();
     if (requestId !== scanState.requestId || scanState.scanner !== scanner) {
       return;
     }
+    await waitForCameraPreview(video);
+    if (requestId !== scanState.requestId || scanState.scanner !== scanner) return;
+    cameraWrap.classList.add("camera-active");
     scanState.starting = false;
     scanState.active = true;
     updateCameraButtons(target, "active");
@@ -806,6 +883,8 @@ async function startCameraScan(target = "batch") {
     await disposeScanner(scanner);
     stopVideoTracks(video);
     cameraWrap.classList.add("hidden");
+    cameraWrap.classList.remove("camera-active");
+    cameraWrap.setAttribute("aria-hidden", "true");
     scanState.starting = false;
     scanState.active = false;
     scanState.target = "";
@@ -941,6 +1020,16 @@ function closeWorkflowSheet() {
 }
 
 function bindEvents() {
+  ["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
+    document.addEventListener(eventName, (event) => event.preventDefault(), { passive: false });
+  });
+  document.addEventListener(
+    "touchmove",
+    (event) => {
+      if (event.touches.length > 1) event.preventDefault();
+    },
+    { passive: false },
+  );
   document.getElementById("login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
