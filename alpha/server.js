@@ -227,6 +227,38 @@ async function handleApi(request, response, url) {
     return true;
   }
 
+  const materialBatchTraceMatch = url.pathname.match(/^\/api\/material-batches\/([^/]+)\/work-order-issues$/);
+  if (materialBatchTraceMatch && request.method === "GET") {
+    const user = requireUser(request, response);
+    if (!user) return true;
+    if (!requireRole(user, response, ["manager"])) return true;
+    let materialBatchId;
+    try {
+      materialBatchId = decodeURIComponent(materialBatchTraceMatch[1]).trim();
+    } catch {
+      sendJson(response, 400, { error: "INVALID_PARAMETER", message: "物料批次参数无效" });
+      return true;
+    }
+    if (!materialBatchId || materialBatchId.includes("/") || materialBatchId.length > 200) {
+      sendJson(response, 400, { error: "INVALID_PARAMETER", message: "物料批次参数无效" });
+      return true;
+    }
+    try {
+      const result = await store.getMaterialBatchWorkOrderIssues(materialBatchId);
+      sendJson(response, 200, result);
+    } catch (error) {
+      if (error?.code === "INVALID_PARAMETER") {
+        sendJson(response, 400, { error: "INVALID_PARAMETER", message: "物料批次参数无效" });
+      } else if (error?.code === "NOT_FOUND") {
+        sendJson(response, 404, { error: "NOT_FOUND", message: "物料批次不存在" });
+      } else {
+        console.error("Material batch trace query failed");
+        sendJson(response, 500, { error: "SERVER_ERROR", message: "批次追溯查询失败" });
+      }
+    }
+    return true;
+  }
+
   if (url.pathname === "/api/material-batches" && request.method === "POST") {
     const user = requireUser(request, response);
     if (!user) return true;

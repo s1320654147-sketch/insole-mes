@@ -1336,6 +1336,136 @@ body.order-drawer-open .order-list-panel:hover {
   gap: 14px;
 }
 
+.material-trace-view {
+  gap: 16px;
+}
+
+.trace-overview-card h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.trace-kpis {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.trace-kpis > div {
+  min-height: 74px;
+  padding: 12px;
+}
+
+.trace-kpis span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trace-kpis strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 19px;
+}
+
+.trace-work-order-list,
+.trace-issue-list {
+  display: grid;
+  gap: 10px;
+}
+
+.trace-work-order-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.trace-work-order-card.expanded {
+  border-color: #bfdbfe;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.08);
+}
+
+.trace-work-order-head,
+.trace-work-order-metrics,
+.trace-issue-detail summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.trace-work-order-head > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.trace-work-order-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary-deep);
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.trace-work-order-metrics {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trace-expand-btn {
+  justify-self: start;
+}
+
+.trace-issue-detail {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
+
+.trace-issue-detail summary {
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.trace-issue-detail-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.trace-movement-details,
+.trace-movement-missing {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border-left: 3px solid #cbd5e1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.trace-movement-details strong {
+  color: var(--text);
+}
+
+.trace-movement-missing {
+  border-left-color: var(--warn);
+}
+
+.trace-loading,
+.trace-refreshing {
+  color: var(--muted);
+}
+
 .detail-title {
   font-size: 13px;
   color: var(--muted);

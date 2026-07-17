@@ -10,6 +10,54 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function createStoreError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function decimalParts(value) {
+  const text = String(value ?? 0).trim();
+  const match = text.match(/^([+-]?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i);
+  if (!match || !Number.isFinite(Number(text))) return { integer: 0n, scale: 0 };
+  let digits = `${match[2]}${match[3] || ""}`.replace(/^0+(?=\d)/, "") || "0";
+  let scale = (match[3] || "").length - Number(match[4] || 0);
+  if (scale < 0) {
+    digits += "0".repeat(-scale);
+    scale = 0;
+  }
+  return {
+    integer: BigInt(`${match[1] === "-" ? "-" : ""}${digits}`),
+    scale,
+  };
+}
+
+export function sumDecimalQuantities(values = []) {
+  const parts = values.map(decimalParts);
+  const scale = parts.reduce((max, item) => Math.max(max, item.scale), 0);
+  const total = parts.reduce(
+    (sum, item) => sum + item.integer * 10n ** BigInt(scale - item.scale),
+    0n
+  );
+  if (total === 0n) return 0;
+  const negative = total < 0n;
+  const digits = (negative ? -total : total).toString().padStart(scale + 1, "0");
+  const raw = scale ? `${digits.slice(0, -scale)}.${digits.slice(-scale)}` : digits;
+  return Number(`${negative ? "-" : ""}${raw}`);
+}
+
+function addDecimalQuantities(left, right) {
+  return sumDecimalQuantities([left, right]);
+}
+
+function requireMaterialBatchId(value) {
+  const id = String(value ?? "").trim();
+  if (!id || id.length > 200 || id.includes("/")) {
+    throw createStoreError("INVALID_PARAMETER", "物料批次参数无效");
+  }
+  return id;
+}
+
 function makeId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
@@ -272,6 +320,250 @@ function enrichWorkOrderMaterialIssues(issues = [], stockMovements = []) {
       correctionReason,
       correctedAt,
     };
+  });
+}
+
+function toOptionalNumber(value) {
+  return value === null || value === undefined || value === "" ? null : Number(value);
+}
+
+function normalizeTraceMovement(input = {}) {
+  const id = String(input.id || "").trim();
+  if (!id) return null;
+  return {
+    id,
+    materialCode: String(input.materialCode || "").trim(),
+    batchNo: String(input.batchNo || "").trim(),
+    type: String(input.type || "").trim(),
+    qty: Number(input.qty || 0),
+    location: String(input.location || "").trim(),
+    note: String(input.note || "").trim(),
+    operator: String(input.operator || "").trim(),
+    source: String(input.source || "").trim(),
+    beforeQty: toOptionalNumber(input.beforeQty),
+    afterQty: toOptionalNumber(input.afterQty),
+    materialBatchId: String(input.materialBatchId || "").trim(),
+    correctionOfMovementId: String(input.correctionOfMovementId || "").trim(),
+    correctedByMovementId: String(input.correctedByMovementId || "").trim(),
+    correctionReason: String(input.correctionReason || "").trim(),
+    correctedAt: input.correctedAt || "",
+    createdAt: input.createdAt || "",
+  };
+}
+
+function normalizeTraceWorkOrder(input = {}) {
+  const id = String(input.id || "").trim();
+  if (!id) return null;
+  return {
+    id,
+    product: String(input.product || "").trim(),
+    status: String(input.status || "").trim(),
+    currentProcess: String(input.currentProcess || "").trim(),
+    plannedQty: toOptionalNumber(input.plannedQty),
+    doneQty: toOptionalNumber(input.doneQty),
+    priority: String(input.priority || "").trim(),
+    dueAt: input.dueAt || "",
+    route: input.route || [],
+  };
+}
+
+function traceDateRank(value) {
+  const time = Date.parse(String(value || ""));
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
+}
+
+function compareTraceDates(left, right) {
+  const leftRank = traceDateRank(left);
+  const rightRank = traceDateRank(right);
+  if (leftRank !== rightRank) return rightRank - leftRank;
+  return String(right || "").localeCompare(String(left || ""));
+}
+
+function traceStatusLabel(status) {
+  if (status === "active") return "当前有效";
+  if (status === "corrected") return "已冲正";
+  return "状态待核验";
+}
+
+function normalizeTraceIssue(rawIssue = {}, batch, movementsById, workOrdersById) {
+  const issue = normalizeWorkOrderMaterialIssueRecord(rawIssue);
+  const movementCandidate = rawIssue.stockMovement?.id ? rawIssue.stockMovement : movementsById.get(issue.stockMovementId);
+  const originalMovement = normalizeTraceMovement(movementCandidate);
+  const correctionMovementId = originalMovement?.correctedByMovementId || issue.correctionMovementId || "";
+  const correctionCandidate = rawIssue.correctionMovement?.id ? rawIssue.correctionMovement : movementsById.get(correctionMovementId);
+  const correctionMovement = normalizeTraceMovement(correctionCandidate);
+  const status = !originalMovement ? "unknown" : originalMovement.correctedByMovementId ? "corrected" : "active";
+  const workOrderCandidate = rawIssue.workOrder?.id ? rawIssue.workOrder : workOrdersById.get(issue.workOrderId);
+  const workOrder = normalizeTraceWorkOrder(workOrderCandidate);
+  const createdAt = issue.createdAt || originalMovement?.createdAt || "";
+  const qty = Number(issue.qty || 0);
+
+  return {
+    ...issue,
+    materialBatchId: issue.materialBatchId || "",
+    resolvedMaterialBatchId: batch.id,
+    status,
+    statusLabel: traceStatusLabel(status),
+    historicalQty: qty,
+    effectiveQty: status === "active" ? qty : 0,
+    netQty: status === "active" ? qty : 0,
+    unknownQty: status === "unknown" ? qty : 0,
+    correctionMovementId,
+    correctionReason: originalMovement?.correctionReason || correctionMovement?.correctionReason || issue.correctionReason || "",
+    correctedAt: originalMovement?.correctedAt || correctionMovement?.createdAt || issue.correctedAt || "",
+    createdAt,
+    stockMovement: originalMovement,
+    originalMovement,
+    correctionMovement,
+    workOrder,
+  };
+}
+
+function summarizeTraceGroup(group) {
+  const status = group.activeIssueCount > 0 ? "active" : group.unknownIssueCount > 0 ? "unknown" : "corrected";
+  return {
+    workOrderId: group.workOrderId,
+    workOrder: group.workOrder,
+    issueCount: group.issues.length,
+    historicalQty: group.historicalQty,
+    effectiveNetQty: group.effectiveNetQty,
+    correctedQty: group.correctedQty,
+    unknownQty: group.unknownQty,
+    activeIssueCount: group.activeIssueCount,
+    correctedIssueCount: group.correctedIssueCount,
+    unknownIssueCount: group.unknownIssueCount,
+    latestIssueAt: group.latestIssueAt,
+    status,
+    statusLabel: traceStatusLabel(status),
+    issues: group.issues,
+  };
+}
+
+export function buildMaterialBatchWorkOrderTrace({ batch, material = null, issues = [], stockMovements = [], workOrders = [] } = {}) {
+  const materialBatch = {
+    ...batch,
+    id: String(batch?.id || "").trim(),
+    materialCode: String(batch?.materialCode || "").trim(),
+    batchNo: String(batch?.batchNo || "").trim(),
+    initialQty: Number(batch?.initialQty || 0),
+    stockQty: Number(batch?.stockQty || 0),
+  };
+  const materialView = material
+    ? { ...material, unit: materialUnitLabel(material), safetyQty: toOptionalNumber(material.safetyQty) }
+    : null;
+  const movementsById = new Map(stockMovements.map((item) => [String(item?.id || "").trim(), item]));
+  const workOrdersById = new Map(workOrders.map((item) => [String(item?.id || "").trim(), item]));
+  const traceIssues = issues
+    .map((issue, index) => ({ issue: normalizeTraceIssue(issue, materialBatch, movementsById, workOrdersById), index }))
+    .sort((left, right) => compareTraceDates(left.issue.createdAt, right.issue.createdAt) || left.index - right.index)
+    .map(({ issue }) => issue);
+
+  const groups = new Map();
+  let historicalQty = 0;
+  let effectiveNetQty = 0;
+  let unknownQty = 0;
+  let correctedQty = 0;
+  let activeIssueCount = 0;
+  let correctedIssueCount = 0;
+  let unknownIssueCount = 0;
+
+  for (const issue of traceIssues) {
+    historicalQty = addDecimalQuantities(historicalQty, issue.qty);
+    if (issue.status === "active") {
+      effectiveNetQty = addDecimalQuantities(effectiveNetQty, issue.qty);
+      activeIssueCount += 1;
+    } else if (issue.status === "corrected") {
+      correctedQty = addDecimalQuantities(correctedQty, issue.qty);
+      correctedIssueCount += 1;
+    } else {
+      unknownQty = addDecimalQuantities(unknownQty, issue.qty);
+      unknownIssueCount += 1;
+    }
+
+    const workOrderId = issue.workOrderId || "";
+    const groupKey = workOrderId || "__unknown_work_order__";
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, {
+        workOrderId,
+        workOrder: issue.workOrder,
+        issues: [],
+        historicalQty: 0,
+        effectiveNetQty: 0,
+        correctedQty: 0,
+        unknownQty: 0,
+        activeIssueCount: 0,
+        correctedIssueCount: 0,
+        unknownIssueCount: 0,
+        latestIssueAt: issue.createdAt || "",
+      });
+    }
+    const group = groups.get(groupKey);
+    group.issues.push(issue);
+    group.workOrder ||= issue.workOrder;
+    group.historicalQty = addDecimalQuantities(group.historicalQty, issue.qty);
+    group.latestIssueAt = compareTraceDates(group.latestIssueAt, issue.createdAt) <= 0 ? group.latestIssueAt : issue.createdAt;
+    if (issue.status === "active") {
+      group.effectiveNetQty = addDecimalQuantities(group.effectiveNetQty, issue.qty);
+      group.activeIssueCount += 1;
+    } else if (issue.status === "corrected") {
+      group.correctedQty = addDecimalQuantities(group.correctedQty, issue.qty);
+      group.correctedIssueCount += 1;
+    } else {
+      group.unknownQty = addDecimalQuantities(group.unknownQty, issue.qty);
+      group.unknownIssueCount += 1;
+    }
+  }
+
+  const workOrderGroups = Array.from(groups.values())
+    .sort((left, right) => compareTraceDates(left.latestIssueAt, right.latestIssueAt) || left.workOrderId.localeCompare(right.workOrderId))
+    .map(summarizeTraceGroup);
+  const summary = {
+    historicalIssueCount: traceIssues.length,
+    historicalWorkOrderCount: workOrderGroups.length,
+    activeWorkOrderCount: workOrderGroups.filter((item) => item.activeIssueCount > 0).length,
+    historicalQty,
+    historicalIssueQty: historicalQty,
+    effectiveNetQty,
+    activeIssueCount,
+    correctedIssueCount,
+    correctedQty,
+    unknownIssueCount,
+    unknownWorkOrderCount: workOrderGroups.filter((item) => item.unknownIssueCount > 0).length,
+    unknownQty,
+  };
+
+  return {
+    batch: {
+      ...materialBatch,
+      materialName: materialView?.name || "",
+      unit: materialView?.unit || "",
+    },
+    material: materialView,
+    summary,
+    stats: summary,
+    workOrders: workOrderGroups,
+    issues: traceIssues,
+  };
+}
+
+function issueMatchesMaterialBatch(issue, batch) {
+  const materialBatchId = String(issue?.materialBatchId || "").trim();
+  if (materialBatchId) return materialBatchId === batch.id;
+  return String(issue?.materialCode || "").trim() === batch.materialCode && String(issue?.batchNo || "").trim() === batch.batchNo;
+}
+
+function buildMaterialBatchTraceFromState(state, batchId) {
+  const id = requireMaterialBatchId(batchId);
+  const batch = (state.materialBatches || []).find((item) => String(item?.id || "").trim() === id);
+  if (!batch) throw createStoreError("NOT_FOUND", "物料批次不存在");
+  const material = (state.materialItems || []).find((item) => item.code === batch.materialCode) || null;
+  const issues = (state.workOrderMaterialIssues || []).filter((issue) => issueMatchesMaterialBatch(issue, batch));
+  return buildMaterialBatchWorkOrderTrace({
+    batch,
+    material,
+    issues,
+    stockMovements: state.stockMovements || [],
+    workOrders: state.workOrders || [],
   });
 }
 
@@ -963,6 +1255,10 @@ async function createFileStore(rootDir) {
         .filter((item) => item.workOrderId === workOrderId);
       return { issues };
     },
+    async getMaterialBatchWorkOrderIssues(batchId) {
+      const state = await readState();
+      return buildMaterialBatchTraceFromState(state, batchId);
+    },
     async createWorkOrderMaterialIssue(workOrderId, input) {
       const state = await readState();
       const order = state.workOrders.find((item) => item.id === workOrderId);
@@ -1413,6 +1709,220 @@ async function createPostgresStore() {
       const issues = enrichWorkOrderMaterialIssues(state.workOrderMaterialIssues, state.stockMovements)
         .filter((item) => item.workOrderId === workOrderId);
       return { issues };
+    },
+    async getMaterialBatchWorkOrderIssues(batchId) {
+      const id = requireMaterialBatchId(batchId);
+      const result = await pool.query(
+        `select
+           batch.id as "batchId",
+           batch.material_code as "batchMaterialCode",
+           batch.batch_no as "batchNo",
+           batch.initial_qty as "initialQty",
+           batch.stock_qty as "stockQty",
+           batch.location as "batchLocation",
+           batch.received_date as "receivedDate",
+           batch.expiry_date as "expiryDate",
+           batch.supplier as "batchSupplier",
+           batch.note as "batchNote",
+           batch.created_at as "batchCreatedAt",
+           batch.updated_at as "batchUpdatedAt",
+           material.code as "materialCode",
+           material.name as "materialName",
+           material.spec as "materialSpec",
+           material.unit as "materialUnit",
+           material.safety_qty as "materialSafetyQty",
+           material.default_location as "materialDefaultLocation",
+           material.supplier as "materialSupplier",
+           material.status as "materialStatus",
+           issue.id as "issueId",
+           issue.work_order_id as "workOrderId",
+           issue.material_code as "issueMaterialCode",
+           issue.material_name as "issueMaterialName",
+           issue.material_batch_id as "issueMaterialBatchId",
+           issue.batch_no as "issueBatchNo",
+           issue.qty as "issueQty",
+           issue.unit as "issueUnit",
+           issue.location as "issueLocation",
+           issue.operator as "issueOperator",
+           issue.source as "issueSource",
+           issue.recommended_batch_no as "recommendedBatchNo",
+           issue.is_fefo_recommended as "isFefoRecommended",
+           issue.override_reason as "overrideReason",
+           issue.stock_movement_id as "stockMovementId",
+           issue.note as "issueNote",
+           issue.created_at as "issueCreatedAt",
+           original.id as "originalMovementId",
+           original.material_code as "originalMaterialCode",
+           original.batch_no as "originalBatchNo",
+           original.type as "originalType",
+           original.qty as "originalQty",
+           original.location as "originalLocation",
+           original.note as "originalNote",
+           original.operator as "originalOperator",
+           original.source as "originalSource",
+           original.before_qty as "originalBeforeQty",
+           original.after_qty as "originalAfterQty",
+           original.material_batch_id as "originalMaterialBatchId",
+           original.correction_of_movement_id as "originalCorrectionOfMovementId",
+           original.corrected_by_movement_id as "originalCorrectedByMovementId",
+           original.correction_reason as "originalCorrectionReason",
+           original.corrected_at as "originalCorrectedAt",
+           original.created_at as "originalCreatedAt",
+           correction.id as "correctionMovementId",
+           correction.material_code as "correctionMaterialCode",
+           correction.batch_no as "correctionBatchNo",
+           correction.type as "correctionType",
+           correction.qty as "correctionQty",
+           correction.location as "correctionLocation",
+           correction.note as "correctionNote",
+           correction.operator as "correctionOperator",
+           correction.source as "correctionSource",
+           correction.before_qty as "correctionBeforeQty",
+           correction.after_qty as "correctionAfterQty",
+           correction.material_batch_id as "correctionMaterialBatchId",
+           correction.correction_of_movement_id as "correctionOfMovementId",
+           correction.corrected_by_movement_id as "correctionCorrectedByMovementId",
+           correction.correction_reason as "correctionReason",
+           correction.corrected_at as "correctionCorrectedAt",
+           correction.created_at as "correctionCreatedAt",
+           work_order.id as "orderId",
+           work_order.product as "orderProduct",
+           work_order.planned_qty as "orderPlannedQty",
+           work_order.done_qty as "orderDoneQty",
+           work_order.current_process as "orderCurrentProcess",
+           work_order.priority as "orderPriority",
+           work_order.status as "orderStatus",
+           work_order.due_at as "orderDueAt",
+           work_order.route as "orderRoute"
+         from material_batches batch
+         left join material_items material on material.code = batch.material_code
+         left join work_order_material_issues issue on (
+           issue.material_batch_id = batch.id
+           or (nullif(issue.material_batch_id, '') is null and issue.material_code = batch.material_code and issue.batch_no = batch.batch_no)
+         )
+         left join stock_movements original on original.id = issue.stock_movement_id
+         left join stock_movements correction on correction.id = original.corrected_by_movement_id
+         left join work_orders work_order on work_order.id = issue.work_order_id
+         where batch.id = $1
+         order by issue.created_at desc nulls last, issue.id desc`,
+        [id]
+      );
+      if (!result.rows.length) throw createStoreError("NOT_FOUND", "物料批次不存在");
+
+      const first = result.rows[0];
+      const batch = {
+        id: first.batchId,
+        materialCode: first.batchMaterialCode,
+        batchNo: first.batchNo,
+        initialQty: Number(first.initialQty || 0),
+        stockQty: Number(first.stockQty || 0),
+        location: first.batchLocation,
+        receivedDate: first.receivedDate,
+        expiryDate: first.expiryDate,
+        supplier: first.batchSupplier,
+        note: first.batchNote,
+        createdAt: first.batchCreatedAt,
+        updatedAt: first.batchUpdatedAt,
+      };
+      const material = {
+        code: first.materialCode || first.batchMaterialCode,
+        name: first.materialName || first.batchMaterialCode,
+        spec: first.materialSpec || "",
+        unit: first.materialUnit || "",
+        safetyQty: toOptionalNumber(first.materialSafetyQty),
+        defaultLocation: first.materialDefaultLocation || "",
+        supplier: first.materialSupplier || "",
+        status: first.materialStatus || "",
+      };
+      const workOrdersById = new Map();
+      const issues = result.rows
+        .filter((row) => row.issueId)
+        .map((row) => {
+          const workOrder = row.orderId
+            ? {
+                id: row.orderId,
+                product: row.orderProduct,
+                plannedQty: row.orderPlannedQty,
+                doneQty: row.orderDoneQty,
+                currentProcess: row.orderCurrentProcess,
+                priority: row.orderPriority,
+                status: row.orderStatus,
+                dueAt: row.orderDueAt,
+                route: row.orderRoute,
+              }
+            : null;
+          if (workOrder && !workOrdersById.has(workOrder.id)) workOrdersById.set(workOrder.id, workOrder);
+          const originalMovement = row.originalMovementId
+            ? {
+                id: row.originalMovementId,
+                materialCode: row.originalMaterialCode,
+                batchNo: row.originalBatchNo,
+                type: row.originalType,
+                qty: row.originalQty,
+                location: row.originalLocation,
+                note: row.originalNote,
+                operator: row.originalOperator,
+                source: row.originalSource,
+                beforeQty: row.originalBeforeQty,
+                afterQty: row.originalAfterQty,
+                materialBatchId: row.originalMaterialBatchId,
+                correctionOfMovementId: row.originalCorrectionOfMovementId,
+                correctedByMovementId: row.originalCorrectedByMovementId,
+                correctionReason: row.originalCorrectionReason,
+                correctedAt: row.originalCorrectedAt,
+                createdAt: row.originalCreatedAt,
+              }
+            : null;
+          const correctionMovement = row.correctionMovementId
+            ? {
+                id: row.correctionMovementId,
+                materialCode: row.correctionMaterialCode,
+                batchNo: row.correctionBatchNo,
+                type: row.correctionType,
+                qty: row.correctionQty,
+                location: row.correctionLocation,
+                note: row.correctionNote,
+                operator: row.correctionOperator,
+                source: row.correctionSource,
+                beforeQty: row.correctionBeforeQty,
+                afterQty: row.correctionAfterQty,
+                materialBatchId: row.correctionMaterialBatchId,
+                correctionOfMovementId: row.correctionOfMovementId,
+                correctedByMovementId: row.correctionCorrectedByMovementId,
+                correctionReason: row.correctionReason,
+                correctedAt: row.correctionCorrectedAt,
+                createdAt: row.correctionCreatedAt,
+              }
+            : null;
+          return {
+            id: row.issueId,
+            workOrderId: row.workOrderId,
+            materialCode: row.issueMaterialCode || row.batchMaterialCode,
+            materialName: row.issueMaterialName || first.materialName || row.batchMaterialCode,
+            materialBatchId: row.issueMaterialBatchId || "",
+            batchNo: row.issueBatchNo || row.batchNo,
+            qty: row.issueQty,
+            unit: row.issueUnit || first.materialUnit || "",
+            location: row.issueLocation || "",
+            operator: row.issueOperator || "",
+            source: row.issueSource || "work_order_issue",
+            recommendedBatchNo: row.recommendedBatchNo || "",
+            isFefoRecommended: Boolean(row.isFefoRecommended),
+            overrideReason: row.overrideReason || "",
+            stockMovementId: row.stockMovementId || "",
+            note: row.issueNote || "",
+            createdAt: row.issueCreatedAt || "",
+            stockMovement: originalMovement,
+            correctionMovement,
+            workOrder,
+          };
+        });
+      return buildMaterialBatchWorkOrderTrace({
+        batch,
+        material,
+        issues,
+        workOrders: Array.from(workOrdersById.values()),
+      });
     },
     async createWorkOrderMaterialIssue(workOrderId, input) {
       const client = await pool.connect();

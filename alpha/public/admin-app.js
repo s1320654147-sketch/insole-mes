@@ -72,6 +72,16 @@ const state = {
   materialDrawerInitialSnapshot: "",
   materialDrawerSaving: false,
   materialDrawerMaterialCode: "",
+  materialTraceOpen: false,
+  materialTraceBatchId: "",
+  materialTraceData: null,
+  materialTraceLoading: false,
+  materialTraceError: "",
+  materialTraceRequestVersion: 0,
+  materialTraceExpandedWorkOrders: {},
+  materialTraceView: "trace",
+  materialTraceReturnOrderId: "",
+  materialTraceScrollTop: 0,
   materialMovementDirty: false,
   materialItemEditDirty: false,
   workOrderIssueDirty: false,
@@ -347,6 +357,160 @@ function downloadCsv(filename, headers, rows) {
   link.click();
   URL.revokeObjectURL(link.href);
   link.remove();
+}
+
+function formatTraceQuantity(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return String(value ?? "");
+  return number.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 12 });
+}
+
+function traceStatusLabel(status) {
+  if (status === "active") return "当前有效";
+  if (status === "corrected") return "已冲正";
+  return "状态待核验";
+}
+
+function traceStatusClass(status) {
+  if (status === "active") return "running";
+  if (status === "corrected") return "warn";
+  return "pending";
+}
+
+function traceIssueRows(trace) {
+  if (Array.isArray(trace?.issues)) return trace.issues;
+  return (trace?.workOrders || []).flatMap((item) => item.issues || []);
+}
+
+function renderTraceMovementDetails(label, movement) {
+  if (!movement) return `<div class="trace-movement-missing">${escapeHtml(label)}：缺失</div>`;
+  return `
+    <div class="trace-movement-details">
+      <strong>${escapeHtml(label)}：${escapeHtml(movement.id || "-")}</strong>
+      <span>类型 ${escapeHtml(movementTypeLabel(movement.type))} / 数量 ${escapeHtml(formatTraceQuantity(movement.qty))} / 时间 ${escapeHtml(formatDateTime(movement.createdAt))}</span>
+      <span>库位 ${escapeHtml(movement.location || "-")} / 操作人 ${escapeHtml(movement.operator || "-")} / 来源 ${escapeHtml(movement.source || "-")}</span>
+      <span>前后库存 ${escapeHtml(movement.beforeQty ?? "-")} → ${escapeHtml(movement.afterQty ?? "-")} / 备注 ${escapeHtml(movement.note || "无")}</span>
+    </div>
+  `;
+}
+
+function renderMaterialTraceIssue(issue, unit) {
+  const fefoText = issue.isFefoRecommended ? "符合 FEFO" : issue.recommendedBatchNo ? `推荐批次：${issue.recommendedBatchNo}` : "未记录 FEFO 推荐";
+  const reasons = [
+    fefoText,
+    issue.overrideReason ? `强制原因：${issue.overrideReason}` : "",
+    issue.note ? `备注：${issue.note}` : "",
+    issue.correctionReason ? `冲正原因：${issue.correctionReason}` : "",
+  ].filter(Boolean).join("；");
+  return `
+    <details class="trace-issue-detail">
+      <summary>
+        <span><strong>${escapeHtml(formatTraceQuantity(issue.qty))}${escapeHtml(unit)}</strong> · ${escapeHtml(formatDateTime(issue.createdAt))}</span>
+        <span class="status ${traceStatusClass(issue.status)}">${escapeHtml(traceStatusLabel(issue.status))}</span>
+      </summary>
+      <div class="trace-issue-detail-body">
+        <div class="item-meta">操作人：${escapeHtml(issue.operator || "-")} / 库位：${escapeHtml(issue.location || "-")} / 原领料流水：${escapeHtml(issue.stockMovementId || "-")}</div>
+        <div class="item-note">${escapeHtml(reasons || "无备注")}</div>
+        ${renderTraceMovementDetails("原始流水", issue.originalMovement || issue.stockMovement)}
+        ${renderTraceMovementDetails("冲正流水", issue.correctionMovement)}
+      </div>
+    </details>
+  `;
+}
+
+function renderMaterialTraceView() {
+  const trace = state.materialTraceData;
+  if (!trace) {
+    return state.materialTraceLoading
+      ? '<div class="empty-state trace-loading">正在加载批次追溯…</div>'
+      : `<div class="empty-state">${escapeHtml(state.materialTraceError || "暂无追溯数据")}</div>`;
+  }
+  const batch = trace.batch || {};
+  const material = trace.material || {};
+  const summary = trace.summary || {};
+  const unit = materialUnitLabel(material.code ? material : batch);
+  const workOrders = trace.workOrders || [];
+  const batchStatus = getBatchStatus(batch);
+  const unknownText = Number(summary.unknownIssueCount || 0)
+    ? `${summary.unknownIssueCount} 笔 / ${summary.unknownWorkOrderCount || 0} 个工单 / ${formatTraceQuantity(summary.unknownQty)}${unit}`
+    : "无待核验记录";
+
+  return `
+    <div class="detail-stack material-trace-view">
+      <div class="detail-block trace-overview-card">
+        <div class="panel-head">
+          <div>
+            <div class="detail-title">批次概览</div>
+            <h2>${escapeHtml(material.name || batch.materialCode || "物料批次")} / ${escapeHtml(batch.batchNo || "-")}</h2>
+          </div>
+          <span class="status ${batchStatusClass(batchStatus)}">${escapeHtml(batchStatus)}</span>
+        </div>
+        <div class="item-meta">物料编号：${escapeHtml(batch.materialCode || "-")} / 库位：${escapeHtml(batch.location || "-")} / 单位：${escapeHtml(unit)}</div>
+        <div class="item-meta">初始数量：${escapeHtml(formatTraceQuantity(batch.initialQty))}${escapeHtml(unit)} / 当前库存：${escapeHtml(formatTraceQuantity(batch.stockQty))}${escapeHtml(unit)} / 到期：${escapeHtml(String(batch.expiryDate || "").slice(0, 10) || "-")}</div>
+      </div>
+
+      <div class="execution-kpis trace-kpis">
+        <div><span>历史领料次数</span><strong>${Number(summary.historicalIssueCount || 0)}</strong></div>
+        <div><span>历史关联工单数</span><strong>${Number(summary.historicalWorkOrderCount || 0)}</strong></div>
+        <div><span>当前有效工单数</span><strong>${Number(summary.activeWorkOrderCount || 0)}</strong></div>
+        <div><span>历史领料总量</span><strong>${escapeHtml(formatTraceQuantity(summary.historicalQty))}${escapeHtml(unit)}</strong></div>
+        <div><span>有效净领料数量</span><strong>${escapeHtml(formatTraceQuantity(summary.effectiveNetQty))}${escapeHtml(unit)}</strong></div>
+        <div><span>待核验记录</span><strong>${Number(summary.unknownIssueCount || 0)}</strong></div>
+      </div>
+
+      <div class="detail-block trace-verification-block">
+        <div class="panel-head">
+          <h2>待核验信息</h2>
+          <span class="status ${Number(summary.unknownIssueCount || 0) ? "pending" : "running"}">${Number(summary.unknownIssueCount || 0) ? "需要核对" : "已确认"}</span>
+        </div>
+        <div class="item-note">${escapeHtml(unknownText)}</div>
+        <div class="item-note">已冲正数量仍计入历史总量，但不计入有效净领料；待核验数量不计入有效统计。</div>
+      </div>
+
+      <div class="detail-block">
+        <div class="panel-head">
+          <div>
+            <h2>按工单汇总的领料结果</h2>
+            <div class="item-note">工单按最近领料时间倒序，明细按领料时间倒序。</div>
+          </div>
+          <button class="ghost-btn slim-btn" type="button" data-trace-export>导出追溯</button>
+        </div>
+        <div class="trace-work-order-list">
+          ${workOrders.length
+            ? workOrders
+                .map((group) => {
+                  const expanded = state.materialTraceExpandedWorkOrders[group.workOrderId] === true;
+                  const orderTitle = group.workOrder?.product ? ` · ${group.workOrder.product}` : "";
+                  return `
+                    <section class="trace-work-order-card ${expanded ? "expanded" : ""}">
+                      <div class="trace-work-order-head">
+                        <div>
+                          ${group.workOrderId
+                            ? `<button class="trace-work-order-link" type="button" data-trace-order-id="${escapeHtml(group.workOrderId)}">${escapeHtml(group.workOrderId)}</button>`
+                            : `<strong>工单待核验</strong>`}
+                          <span class="item-meta">${escapeHtml(orderTitle.replace(/^ · /, ""))}</span>
+                        </div>
+                        <span class="status ${traceStatusClass(group.status)}">${escapeHtml(group.statusLabel || traceStatusLabel(group.status))}</span>
+                      </div>
+                      <div class="trace-work-order-metrics">
+                        <span>历史 ${escapeHtml(formatTraceQuantity(group.historicalQty))}${escapeHtml(unit)}</span>
+                        <span>有效 ${escapeHtml(formatTraceQuantity(group.effectiveNetQty))}${escapeHtml(unit)}</span>
+                        <span>已冲正 ${escapeHtml(formatTraceQuantity(group.correctedQty))}${escapeHtml(unit)}</span>
+                        <span>待核验 ${escapeHtml(formatTraceQuantity(group.unknownQty))}${escapeHtml(unit)}</span>
+                        <span>${Number(group.issueCount || 0)} 笔</span>
+                      </div>
+                      <button class="ghost-btn slim-btn trace-expand-btn" type="button" data-trace-toggle="${escapeHtml(group.workOrderId)}">${expanded ? "收起明细" : "展开明细"}</button>
+                      ${expanded ? `<div class="trace-issue-list">${(group.issues || []).map((issue) => renderMaterialTraceIssue(issue, unit)).join("")}</div>` : ""}
+                    </section>
+                  `;
+                })
+                .join("")
+            : '<div class="empty-state">该批次暂无工单领料记录。</div>'}
+        </div>
+      </div>
+      ${state.materialTraceLoading ? '<div class="item-note trace-refreshing">正在静默更新追溯数据…</div>' : ""}
+    </div>
+  `;
 }
 
 function movementTypeLabel(type) {
@@ -856,6 +1020,82 @@ function exportStockMovementsCsv() {
   );
 }
 
+function exportMaterialBatchTraceCsv() {
+  const trace = state.materialTraceData;
+  if (!trace) {
+    showToast("追溯数据尚未加载");
+    return;
+  }
+  const groupByOrderId = new Map((trace.workOrders || []).map((group) => [group.workOrderId, group]));
+  const rows = traceIssueRows(trace).map((issue) => {
+    const group = groupByOrderId.get(issue.workOrderId) || {};
+    const order = group.workOrder || issue.workOrder || {};
+    const original = issue.originalMovement || issue.stockMovement || {};
+    const correction = issue.correctionMovement || {};
+    return [
+      issue.createdAt ? formatDateTime(issue.createdAt) : "",
+      issue.statusLabel || traceStatusLabel(issue.status),
+      issue.workOrderId || "",
+      order.product || "",
+      order.status || "",
+      group.issueCount ?? "",
+      group.statusLabel || traceStatusLabel(group.status),
+      group.latestIssueAt ? formatDateTime(group.latestIssueAt) : "",
+      group.historicalQty ?? "",
+      group.effectiveNetQty ?? "",
+      group.correctedQty ?? "",
+      group.unknownQty ?? "",
+      group.activeIssueCount ?? "",
+      group.correctedIssueCount ?? "",
+      group.unknownIssueCount ?? "",
+      issue.materialCode || trace.batch?.materialCode || "",
+      issue.materialName || trace.material?.name || "",
+      issue.batchNo || trace.batch?.batchNo || "",
+      issue.qty ?? "",
+      issue.effectiveQty ?? "",
+      issue.unit || trace.batch?.unit || "",
+      issue.location || "",
+      issue.operator || "",
+      issue.recommendedBatchNo || "",
+      issue.isFefoRecommended ? "是" : "否",
+      issue.overrideReason || "",
+      issue.note || "",
+      original.id || "",
+      original.id ? movementTypeLabel(original.type) : "",
+      original.qty ?? "",
+      original.beforeQty ?? "",
+      original.afterQty ?? "",
+      original.location || "",
+      original.operator || "",
+      original.source || "",
+      original.createdAt ? formatDateTime(original.createdAt) : "",
+      original.correctedByMovementId || "",
+      original.correctionReason || issue.correctionReason || "",
+      original.correctedAt ? formatDateTime(original.correctedAt) : "",
+      correction.id || "",
+      correction.id ? movementTypeLabel(correction.type) : "",
+      correction.qty ?? "",
+      correction.beforeQty ?? "",
+      correction.afterQty ?? "",
+      correction.location || "",
+      correction.operator || "",
+      correction.source || "",
+      correction.createdAt ? formatDateTime(correction.createdAt) : "",
+      correction.note || "",
+    ];
+  });
+  downloadCsv(
+    `material-batch-trace-${trace.batch?.materialCode || "batch"}-${trace.batch?.batchNo || "history"}-${fileDateStamp()}.csv`,
+    [
+      "领料时间", "追溯状态", "工单号", "产品", "工单状态", "工单领料笔数", "工单汇总状态", "工单最近领料时间", "工单历史总量", "工单有效净领料", "工单已冲正数量", "工单待核验数量", "工单当前有效笔数", "工单已冲正笔数", "工单待核验笔数",
+      "物料编号", "物料名称", "批次号", "领料数量", "有效数量", "单位", "库位", "领料操作人", "FEFO推荐批次", "符合FEFO", "强制原因", "领料备注",
+      "原始流水ID", "原始流水类型", "原始流水数量", "原始流水前库存", "原始流水后库存", "原始流水库位", "原始流水操作人", "原始流水来源", "原始流水时间", "关联冲正流水ID", "冲正原因", "冲正时间",
+      "冲正流水ID", "冲正流水类型", "冲正流水数量", "冲正流水前库存", "冲正流水后库存", "冲正流水库位", "冲正流水操作人", "冲正流水来源", "冲正流水时间", "冲正流水备注",
+    ],
+    rows
+  );
+}
+
 function getSelectedMaterialItem() {
   if (state.materialEditorMode === "create") return null;
   return getMaterialItems().find((item) => item.code === state.selectedMaterialCode) || getMaterialItems()[0] || null;
@@ -981,17 +1221,24 @@ function syncSelections() {
   }
 
   const materialItems = getMaterialItems();
+  const traceBatch = state.materialTraceOpen
+    ? getMaterialBatches().find((item) => item.id === state.materialTraceBatchId)
+    : null;
+  if (traceBatch) {
+    state.selectedMaterialCode = traceBatch.materialCode;
+    state.selectedMaterialKey = materialKey(traceBatch);
+  }
   const materialCodeExists = materialItems.some((item) => item.code === state.selectedMaterialCode);
   if (state.materialEditorMode === "create") {
     state.selectedMaterialCode = "";
     state.selectedMaterialKey = "";
-  } else if (!materialCodeExists) {
+  } else if (!materialCodeExists && !state.materialTraceOpen) {
     state.selectedMaterialCode = materialItems[0]?.code || "";
   }
 
   const selectedBatches = getMaterialBatches().filter((item) => item.materialCode === state.selectedMaterialCode);
   const materialExists = selectedBatches.some((item) => materialKey(item) === state.selectedMaterialKey);
-  if (state.materialEditorMode !== "create" && !materialExists) {
+  if (state.materialEditorMode !== "create" && !materialExists && !state.materialTraceOpen) {
     state.selectedMaterialKey = materialKey(selectedBatches[0]);
   }
 }
@@ -1433,6 +1680,157 @@ function renderWorkOrderStatusFilters() {
   });
 }
 
+function ensureMaterialTraceBackButton() {
+  const existing = document.getElementById("back-material-trace-btn");
+  if (existing) return existing;
+  const button = document.createElement("button");
+  button.className = "ghost-btn slim-btn hidden";
+  button.id = "back-material-trace-btn";
+  button.type = "button";
+  button.textContent = "返回批次追溯";
+  button.addEventListener("click", returnToMaterialTrace);
+  const closeButton = document.getElementById("close-order-detail-btn");
+  closeButton?.parentElement?.insertBefore(button, closeButton);
+  return button;
+}
+
+function captureMaterialTraceScroll() {
+  if (!state.materialTraceOpen) return;
+  const drawerScroll = document.getElementById("order-drawer-scroll");
+  if (drawerScroll) state.materialTraceScrollTop = drawerScroll.scrollTop;
+}
+
+function restoreMaterialTraceScroll() {
+  if (!state.materialTraceOpen || state.materialTraceView !== "trace") return;
+  window.requestAnimationFrame(() => {
+    const drawerScroll = document.getElementById("order-drawer-scroll");
+    if (drawerScroll) drawerScroll.scrollTop = state.materialTraceScrollTop;
+  });
+}
+
+function bindMaterialTraceViewEvents() {
+  document.querySelectorAll("[data-trace-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      captureMaterialTraceScroll();
+      const workOrderId = button.getAttribute("data-trace-toggle") || "";
+      state.materialTraceExpandedWorkOrders[workOrderId] = !state.materialTraceExpandedWorkOrders[workOrderId];
+      renderOrderDetail();
+    });
+  });
+  document.querySelectorAll("[data-trace-order-id]").forEach((button) => {
+    button.addEventListener("click", () => openMaterialTraceWorkOrder(button.getAttribute("data-trace-order-id") || ""));
+  });
+  document.querySelector("[data-trace-export]")?.addEventListener("click", exportMaterialBatchTraceCsv);
+}
+
+function ensureOrderDrawerPlacement() {
+  const main = document.querySelector(".main");
+  const backdrop = document.getElementById("order-detail-backdrop");
+  const panel = document.getElementById("order-detail-panel");
+  if (!main || !backdrop || !panel) return;
+  if (backdrop.parentElement !== main) main.appendChild(backdrop);
+  if (panel.parentElement !== main) main.appendChild(panel);
+}
+
+function renderMaterialTraceDrawer() {
+  captureMaterialTraceScroll();
+  const root = document.getElementById("order-detail");
+  root.innerHTML = renderMaterialTraceView();
+  bindMaterialTraceViewEvents();
+  restoreMaterialTraceScroll();
+}
+
+async function refreshMaterialBatchTrace({ silent = false } = {}) {
+  if (!state.materialTraceOpen || !state.materialTraceBatchId) return false;
+  const batchId = state.materialTraceBatchId;
+  const requestVersion = state.materialTraceRequestVersion + 1;
+  state.materialTraceRequestVersion = requestVersion;
+  if (!silent || !state.materialTraceData) {
+    state.materialTraceLoading = true;
+    if (!state.materialTraceData) renderOrderDetail();
+  }
+  try {
+    const result = await api(`/api/material-batches/${encodeURIComponent(batchId)}/work-order-issues`);
+    if (!state.materialTraceOpen || state.materialTraceBatchId !== batchId || state.materialTraceRequestVersion !== requestVersion) return false;
+    state.materialTraceData = result;
+    state.materialTraceLoading = false;
+    state.materialTraceError = "";
+    renderOrderDetail();
+    return true;
+  } catch (error) {
+    if (!state.materialTraceOpen || state.materialTraceBatchId !== batchId || state.materialTraceRequestVersion !== requestVersion) return false;
+    state.materialTraceLoading = false;
+    state.materialTraceError = error.message || "批次追溯查询失败";
+    renderOrderDetail();
+    return false;
+  }
+}
+
+async function openMaterialBatchTrace(batch) {
+  if (!batch?.id) {
+    showToast("当前批次缺少有效编号");
+    return;
+  }
+  if (state.orderFocusMode && !state.materialTraceOpen && !requestCloseOrderDrawer()) return;
+  const sameBatch = state.materialTraceOpen && state.materialTraceBatchId === batch.id;
+  state.selectedMaterialCode = batch.materialCode || state.selectedMaterialCode;
+  state.selectedMaterialKey = materialKey(batch);
+  state.materialTraceOpen = true;
+  state.materialTraceBatchId = batch.id;
+  state.materialTraceView = "trace";
+  state.materialTraceReturnOrderId = state.selectedOrderId;
+  state.materialTraceError = "";
+  state.materialTraceLoading = true;
+  state.orderEditorMode = "edit";
+  state.orderDrawerMode = "trace";
+  state.orderFocusMode = true;
+  state.orderFormDirty = false;
+  state.workOrderIssueFormOpen = false;
+  state.workOrderIssueDirty = false;
+  if (!sameBatch) {
+    state.materialTraceData = null;
+    state.materialTraceExpandedWorkOrders = {};
+    state.materialTraceScrollTop = 0;
+  }
+  renderOrderDetail();
+  focusOrderDetail({ resetScroll: !sameBatch });
+  await refreshMaterialBatchTrace({ silent: false });
+}
+
+function openMaterialTraceWorkOrder(workOrderId) {
+  if (!state.materialTraceOpen || !workOrderId) return;
+  const order = state.data?.workOrders?.find((item) => item.id === workOrderId);
+  if (!order) {
+    showToast("关联工单不存在或已不可用");
+    return;
+  }
+  captureMaterialTraceScroll();
+  state.materialTraceView = "order";
+  state.selectedOrderId = workOrderId;
+  state.orderEditorMode = "edit";
+  state.orderDrawerMode = "detail";
+  state.orderFormDirty = false;
+  state.orderFormInitialSnapshot = "";
+  state.workOrderIssueFormOpen = false;
+  state.workOrderIssueDirty = false;
+  renderOrderDetail();
+  focusOrderDetail({ resetScroll: true });
+}
+
+function returnToMaterialTrace() {
+  if (!state.materialTraceOpen) return;
+  state.materialTraceView = "trace";
+  state.selectedOrderId = state.materialTraceReturnOrderId || state.selectedOrderId;
+  state.orderEditorMode = "edit";
+  state.orderDrawerMode = "trace";
+  state.orderFormDirty = false;
+  state.orderFormInitialSnapshot = "";
+  state.workOrderIssueFormOpen = false;
+  state.workOrderIssueDirty = false;
+  renderOrderDetail();
+  restoreMaterialTraceScroll();
+}
+
 function updateOrderWorkspaceVisibility() {
   const detailPanel = document.getElementById("order-detail-panel");
   const backdrop = document.getElementById("order-detail-backdrop");
@@ -1471,19 +1869,35 @@ function unlockOrderListScroll() {
   window.requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "auto" }));
 }
 
-function focusOrderDetail() {
+function focusOrderDetail({ resetScroll = true } = {}) {
   state.orderFocusMode = true;
   updateOrderWorkspaceVisibility();
   lockOrderListScroll();
   window.requestAnimationFrame(() => {
     const drawerScroll = document.getElementById("order-drawer-scroll");
-    if (drawerScroll) drawerScroll.scrollTop = 0;
+    if (drawerScroll && resetScroll) drawerScroll.scrollTop = 0;
     document.getElementById("close-order-detail-btn")?.focus({ preventScroll: true });
   });
 }
 
 function leaveOrderFocusMode() {
   const wasCreating = state.orderEditorMode === "create";
+  const wasMaterialTraceOpen = state.materialTraceOpen;
+  const traceReturnOrderId = state.materialTraceReturnOrderId;
+  captureMaterialTraceScroll();
+  if (wasMaterialTraceOpen) {
+    state.materialTraceRequestVersion += 1;
+    state.materialTraceOpen = false;
+    state.materialTraceBatchId = "";
+    state.materialTraceData = null;
+    state.materialTraceLoading = false;
+    state.materialTraceError = "";
+    state.materialTraceExpandedWorkOrders = {};
+    state.materialTraceView = "trace";
+    state.materialTraceReturnOrderId = "";
+    state.materialTraceScrollTop = 0;
+    if (traceReturnOrderId) state.selectedOrderId = traceReturnOrderId;
+  }
   state.orderFocusMode = false;
   state.workOrderIssueFormOpen = false;
   state.workOrderIssueDirty = false;
@@ -1609,6 +2023,7 @@ function renderOrders() {
 }
 
 function updateOrderDrawerChrome(order, showEditor) {
+  ensureOrderDrawerPlacement();
   const title = document.getElementById("order-editor-title");
   const modeLabel = document.getElementById("order-drawer-mode-label");
   const status = document.getElementById("order-drawer-status");
@@ -1617,6 +2032,23 @@ function updateOrderDrawerChrome(order, showEditor) {
   const footer = document.getElementById("order-drawer-footer");
   const saveButton = document.getElementById("order-save-btn");
   const isCreating = state.orderEditorMode === "create";
+  const backButton = ensureMaterialTraceBackButton();
+  const isMaterialTrace = state.materialTraceOpen && state.orderDrawerMode === "trace";
+  const isMaterialTraceOrder = state.materialTraceOpen && state.materialTraceView === "order" && state.orderDrawerMode === "detail";
+
+  if (isMaterialTrace) {
+    title.textContent = `批次追溯 · ${state.materialTraceData?.batch?.batchNo || state.materialTraceBatchId || "加载中"}`;
+    modeLabel.textContent = "批次追溯";
+    status.textContent = state.materialTraceLoading ? "正在更新" : "只读";
+    status.className = `status ${state.materialTraceLoading ? "pending" : "running"}`;
+    status.classList.remove("hidden");
+    editButton.classList.add("hidden");
+    cancelButton.classList.add("hidden");
+    backButton.classList.add("hidden");
+    footer.classList.add("hidden");
+    saveButton.disabled = true;
+    return;
+  }
 
   title.textContent = isCreating
     ? "新建生产单"
@@ -1632,6 +2064,7 @@ function updateOrderDrawerChrome(order, showEditor) {
   footer.classList.toggle("hidden", !showEditor);
   saveButton.textContent = state.orderSaving ? "正在保存..." : isCreating ? "保存生产单" : "保存工单";
   saveButton.disabled = state.orderSaving;
+  backButton.classList.toggle("hidden", !isMaterialTraceOrder || showEditor);
 }
 
 function snapshotOrderForm(form) {
@@ -1639,6 +2072,11 @@ function snapshotOrderForm(form) {
 }
 
 function renderOrderDetail() {
+  if (state.materialTraceOpen && state.orderDrawerMode === "trace") {
+    updateOrderDrawerChrome(null, false);
+    renderMaterialTraceDrawer();
+    return;
+  }
   const order = state.orderEditorMode === "edit" ? getSelectedOrder() : null;
   const showEditor = state.orderEditorMode === "create" || state.orderDrawerMode === "edit";
   updateOrderDrawerChrome(order, showEditor);
@@ -2239,6 +2677,7 @@ function renderMaterials() {
                       <a class="ghost-btn micro-btn" href="${escapeHtml(itemLabelLink)}" target="_blank" rel="noreferrer" data-row-action="open">标签</a>
                       <a class="ghost-btn micro-btn" href="${escapeHtml(itemPrintLink)}" target="_blank" rel="noreferrer" data-row-action="print">打印</a>
                       <button class="ghost-btn micro-btn" type="button" data-copy-batch-code="${escapeHtml(itemBatchCode)}">复制</button>
+                      <button class="ghost-btn micro-btn" type="button" data-trace-batch="${escapeHtml(item.id || materialKey(item))}">追溯</button>
                     </div>
                   </div>
                 `;
@@ -2472,6 +2911,15 @@ function renderMaterials() {
 
   document.querySelectorAll("[data-row-action]").forEach((action) => {
     action.addEventListener("click", (event) => event.stopPropagation());
+  });
+
+  document.querySelectorAll("[data-trace-batch]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const batchId = button.getAttribute("data-trace-batch") || "";
+      const batch = getMaterialBatches().find((item) => item.id === batchId || materialKey(item) === batchId);
+      if (batch) openMaterialBatchTrace(batch);
+    });
   });
 
   document.querySelectorAll("[data-copy-batch-code]").forEach((button) => {
@@ -2829,6 +3277,9 @@ async function loadState({ source = "manual", force = false } = {}) {
       state.deepLinkApplied = true;
     }
     renderAll();
+    if (state.materialTraceOpen) {
+      void refreshMaterialBatchTrace({ silent: true });
+    }
     if (state.orderFocusMode) lockOrderListScroll();
     if (!state.orderScrollLocked) window.requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "auto" }));
     state.lastUpdatedAt = new Date();
@@ -2894,6 +3345,16 @@ function logout() {
   state.movementPage = 1;
   state.materialDrawerMode = "";
   state.materialDrawerDirty = false;
+  state.materialTraceRequestVersion += 1;
+  state.materialTraceOpen = false;
+  state.materialTraceBatchId = "";
+  state.materialTraceData = null;
+  state.materialTraceLoading = false;
+  state.materialTraceError = "";
+  state.materialTraceExpandedWorkOrders = {};
+  state.materialTraceView = "trace";
+  state.materialTraceReturnOrderId = "";
+  state.materialTraceScrollTop = 0;
   state.materialMovementDirty = false;
   state.materialItemEditDirty = false;
   state.workOrderIssueDirty = false;
