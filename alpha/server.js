@@ -54,6 +54,13 @@ function requireRole(user, response, roles) {
   return false;
 }
 
+function isMaterialIssueBusinessError(error) {
+  if (error?.code === "WORK_ORDER_STATUS_NOT_ALLOWED") return true;
+  return /^(工单不存在|物料档案不存在|物料批次不存在|操作人不能为空|物料料号不能为空|物料批次不能为空|出入库数量必须大于 0|出库数量不能大于当前库存|当前批次已过期|当前不是 FEFO 推荐批次)/.test(
+    String(error?.message || "")
+  );
+}
+
 async function withScopedState(result, role) {
   return {
     ...result,
@@ -140,15 +147,24 @@ async function handleApi(request, response, url) {
   if (materialIssuesMatch && request.method === "POST") {
     const user = requireUser(request, response);
     if (!user) return true;
-    if (!requireRole(user, response, ["manager"])) return true;
+    if (!requireRole(user, response, ["manager", "worker"])) return true;
     const body = await readJson(request);
     const workOrderId = decodeURIComponent(materialIssuesMatch[1]);
-    const result = await store.createWorkOrderMaterialIssue(workOrderId, {
-      ...body,
-      operator: user.name,
-      source: "work_order_issue",
-    });
-    sendJson(response, 201, await withScopedState(result, user.role));
+    try {
+      const result = await store.createWorkOrderMaterialIssue(workOrderId, {
+        ...body,
+        operator: user.name,
+        source: "work_order_issue",
+      });
+      sendJson(response, 201, await withScopedState(result, user.role));
+    } catch (error) {
+      if (isMaterialIssueBusinessError(error)) {
+        sendJson(response, 400, { error: error.code || "INVALID_MATERIAL_ISSUE", message: error.message });
+      } else {
+        console.error("Work order material issue failed");
+        sendJson(response, 500, { error: "SERVER_ERROR", message: "工单领料失败，请稍后重试" });
+      }
+    }
     return true;
   }
 

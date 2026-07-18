@@ -2,6 +2,7 @@
 const adminTokenKey = "insole_mes_alpha_token_admin";
 
 import QrScanner from "/vendor/qr-scanner/qr-scanner.min.js";
+import { parseBatchCode, parseWorkOrderCode } from "./mobile-code-parser.js";
 import {
   getProcessInputContext as calculateProcessInputContext,
   getProcessReportedQty as calculateProcessReportedQty,
@@ -18,6 +19,23 @@ const mobileState = {
   workOrderScanValue: "",
   reportSubmitting: false,
   stockSubmitting: false,
+  materialIssueSubmitting: false,
+  materialIssueSubmitUnknown: false,
+};
+
+const materialIssueState = {
+  step: "workOrder",
+  workOrderId: "",
+  workOrderScanValue: "",
+  batchScanValue: "",
+  materialBatchId: "",
+  materialCode: "",
+  batchNo: "",
+  location: "",
+  qty: "",
+  overrideReason: "",
+  note: "",
+  result: null,
 };
 
 const scanState = {
@@ -48,14 +66,6 @@ function clearToken() {
   localStorage.removeItem(tokenKey);
 }
 
-function handoffToAdmin(tokenValue = token()) {
-  if (tokenValue) {
-    localStorage.setItem(adminTokenKey, tokenValue);
-  }
-  clearToken();
-  window.location.replace("./admin.html");
-}
-
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
@@ -66,7 +76,12 @@ async function api(path, options = {}) {
     },
   });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.message || "请求失败");
+  if (!response.ok) {
+    const error = new Error(payload.message || "请求失败");
+    error.status = response.status;
+    error.code = payload.error || "";
+    throw error;
+  }
   return payload;
 }
 
@@ -134,59 +149,6 @@ function buildBatchCode(material) {
 
 function buildWorkOrderCode(order) {
   return ["WO", order.id, order.currentProcess || ""].join("|");
-}
-
-function extractWorkOrderPayload(rawValue) {
-  const value = String(rawValue || "").trim();
-  if (!value) return "";
-  if (!/^https?:\/\//i.test(value)) return value;
-  try {
-    const parsedUrl = new URL(value);
-    return String(parsedUrl.searchParams.get("workOrder") || parsedUrl.searchParams.get("order") || parsedUrl.searchParams.get("code") || value).trim();
-  } catch {
-    return value;
-  }
-}
-
-function parseWorkOrderCode(rawValue) {
-  const value = extractWorkOrderPayload(rawValue);
-  if (!value) return null;
-  if (!value.includes("|")) {
-    return {
-      workOrderId: value,
-      processName: "",
-    };
-  }
-  const parts = value.split("|").map((part) => part.trim());
-  if (parts.length < 2 || parts[0] !== "WO") return null;
-  return {
-    workOrderId: parts[1],
-    processName: parts.slice(2).join("|") || "",
-  };
-}
-
-function extractBatchPayload(rawValue) {
-  const value = String(rawValue || "").trim();
-  if (!value) return "";
-  if (!/^https?:\/\//i.test(value)) return value;
-  try {
-    const parsedUrl = new URL(value);
-    return String(parsedUrl.searchParams.get("batch") || parsedUrl.searchParams.get("code") || value).trim();
-  } catch {
-    return value;
-  }
-}
-
-function parseBatchCode(rawValue) {
-  const value = extractBatchPayload(rawValue);
-  if (!value) return null;
-  const parts = value.split("|").map((part) => part.trim());
-  if (parts.length < 4 || parts[0] !== "MAT") return null;
-  return {
-    materialCode: parts[1],
-    batchNo: parts[2],
-    location: parts.slice(3).join("|") || "",
-  };
 }
 
 function findMaterial(materialCode, batchNo) {
@@ -286,6 +248,7 @@ function updateStockFefoPreview() {
 }
 
 function getRoleConfig(role) {
+  const canIssueMaterial = role === "manager" || role === "worker";
   return {
     eyebrow: "现场端",
     title: "现场作业",
@@ -297,6 +260,7 @@ function getRoleConfig(role) {
     primaryAction: { text: "扫工单码", action: "scan-work" },
     secondaryAction: { text: "扫码入库", action: "stock-in" },
     tertiaryAction: { text: "扫码出库", action: "stock-out" },
+    materialIssueAction: { text: "工单领料", action: "material-issue", hidden: !canIssueMaterial },
     showTasks: true,
     showReport: true,
     showStock: true,
@@ -311,10 +275,6 @@ function getRoleConfig(role) {
 function applyRoleMode() {
   const user = mobileState.currentUser;
   if (!user) return;
-  if (user.role === "manager") {
-    handoffToAdmin();
-    return;
-  }
 
   const config = getRoleConfig(user.role);
   document.getElementById("login-title").textContent = config.loginTitle;
@@ -324,7 +284,7 @@ function applyRoleMode() {
   document.getElementById("tasks-title").textContent = config.tasksTitle;
   document.getElementById("tasks-meta").textContent = config.tasksMeta;
   document.getElementById("report-title").textContent = config.reportTitle;
-  document.getElementById("admin-link").classList.toggle("hidden", user.role === "manager");
+  document.getElementById("admin-link").classList.toggle("hidden", user.role !== "manager");
 
   document.getElementById("action-primary").textContent = config.primaryAction.text;
   document.getElementById("action-primary").setAttribute("data-action", config.primaryAction.action);
@@ -332,6 +292,9 @@ function applyRoleMode() {
   document.getElementById("action-secondary").setAttribute("data-action", config.secondaryAction.action);
   document.getElementById("action-tertiary").textContent = config.tertiaryAction.text;
   document.getElementById("action-tertiary").setAttribute("data-action", config.tertiaryAction.action);
+  document.getElementById("action-material-issue").textContent = config.materialIssueAction.text;
+  document.getElementById("action-material-issue").setAttribute("data-action", config.materialIssueAction.action);
+  document.getElementById("action-material-issue").classList.toggle("hidden", config.materialIssueAction.hidden);
 
   document.getElementById("tasks-section").classList.toggle("hidden", !config.showTasks);
   document.getElementById("report-section").classList.toggle("hidden", !config.showReport);
@@ -367,7 +330,7 @@ function renderSummary() {
 
 function renderTasks() {
   const root = document.getElementById("task-list");
-  const workOrders = mobileState.data?.workOrders || [];
+  const workOrders = (mobileState.data?.workOrders || []).filter((order) => order.status !== "已完成");
   if (!workOrders.length) {
     root.innerHTML = '<div class="empty-state">当前没有待办工单。</div>';
     return;
@@ -624,6 +587,295 @@ function applyWorkOrderCode(rawValue, announce = true) {
   return true;
 }
 
+const materialIssueAllowedStatuses = new Set(["待领料", "待开始", "生产中"]);
+const materialIssueSteps = ["workOrder", "batch", "input", "confirm"];
+
+function formatQuantity(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "0";
+  return String(Number(numeric.toFixed(12)));
+}
+
+function selectedMaterialIssueOrder() {
+  return findWorkOrder(materialIssueState.workOrderId);
+}
+
+function selectedMaterialIssueBatch() {
+  return findMaterial(materialIssueState.materialCode, materialIssueState.batchNo);
+}
+
+function issueCardGrid(items) {
+  return `<div class="issue-card-grid">${items
+    .map(
+      ([label, value]) => `
+        <div class="issue-card-item">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value ?? "-")}</strong>
+        </div>
+      `
+    )
+    .join("")}</div>`;
+}
+
+function setMaterialIssueError(message = "") {
+  const root = document.getElementById("material-issue-error");
+  root.textContent = message;
+  root.classList.toggle("hidden", !message);
+}
+
+function setMaterialIssueStep(step) {
+  if (mobileState.materialIssueSubmitting) return;
+  void stopCameraScan({ keepStatus: true });
+  materialIssueState.step = step;
+  renderMaterialIssue();
+  window.setTimeout(() => {
+    document.querySelector("#material-issue-section .workflow-sheet-body")?.scrollTo({ top: 0, behavior: "auto" });
+  }, 20);
+}
+
+function resetMaterialIssue({ keepOrder = false } = {}) {
+  const orderId = keepOrder ? materialIssueState.workOrderId : "";
+  const workOrderScanValue = keepOrder ? materialIssueState.workOrderScanValue : "";
+  Object.assign(materialIssueState, {
+    step: keepOrder ? "batch" : "workOrder",
+    workOrderId: orderId,
+    workOrderScanValue,
+    batchScanValue: "",
+    materialBatchId: "",
+    materialCode: "",
+    batchNo: "",
+    location: "",
+    qty: "",
+    overrideReason: "",
+    note: "",
+    result: null,
+  });
+  mobileState.materialIssueSubmitting = false;
+  mobileState.materialIssueSubmitUnknown = false;
+  const fieldValues = {
+    "issue-workorder-input": workOrderScanValue,
+    "issue-batch-input": "",
+    "issue-qty": "",
+    "issue-override-reason": "",
+    "issue-note": "",
+  };
+  Object.entries(fieldValues).forEach(([id, value]) => {
+    const field = document.getElementById(id);
+    if (field) field.value = value;
+  });
+  setMaterialIssueError("");
+  renderMaterialIssue();
+}
+
+function applyMaterialIssueWorkOrder(rawValue) {
+  const parsed = parseWorkOrderCode(rawValue);
+  if (!parsed) {
+    setMaterialIssueError("未识别到本系统工单二维码。");
+    return false;
+  }
+  const order = findWorkOrder(parsed.workOrderId);
+  if (!order) {
+    setMaterialIssueError("工单不存在。");
+    return false;
+  }
+  if (!materialIssueAllowedStatuses.has(String(order.status || ""))) {
+    setMaterialIssueError(`当前工单状态不允许领料：${order.status || "未知状态"}`);
+    return false;
+  }
+  materialIssueState.workOrderId = order.id;
+  materialIssueState.workOrderScanValue = buildWorkOrderCode({
+    ...order,
+    currentProcess: parsed.processName || order.currentProcess,
+  });
+  document.getElementById("issue-workorder-input").value = materialIssueState.workOrderScanValue;
+  setMaterialIssueError("");
+  renderMaterialIssue();
+  return true;
+}
+
+function applyMaterialIssueBatch(rawValue) {
+  const parsed = parseBatchCode(rawValue);
+  if (!parsed) {
+    setMaterialIssueError("未识别到本系统物料批次二维码。");
+    return false;
+  }
+  const batch = findMaterial(parsed.materialCode, parsed.batchNo);
+  if (!batch) {
+    setMaterialIssueError("物料批次不存在。");
+    return false;
+  }
+  if (Number(batch.stockQty || 0) <= 0) {
+    setMaterialIssueError("当前批次已用完。");
+    return false;
+  }
+  materialIssueState.batchScanValue = buildBatchCode({ ...batch, location: parsed.location || batch.location });
+  materialIssueState.materialBatchId = batch.materialBatchId || "";
+  materialIssueState.materialCode = batch.code;
+  materialIssueState.batchNo = batch.batchNo;
+  materialIssueState.location = parsed.location || batch.location || "";
+  document.getElementById("issue-batch-input").value = materialIssueState.batchScanValue;
+  setMaterialIssueError("");
+  renderMaterialIssue();
+  return true;
+}
+
+function validateMaterialIssueInput() {
+  const batch = selectedMaterialIssueBatch();
+  const qtyText = String(document.getElementById("issue-qty").value || "").trim();
+  const qty = Number(qtyText);
+  if (!qtyText || !Number.isFinite(qty) || qty <= 0) {
+    return "领料数量必须是大于 0 的有效数字。";
+  }
+  if (!batch || Number(batch.stockQty || 0) <= 0) return "当前批次已用完。";
+  if (qty > Number(batch.stockQty || 0)) {
+    return `库存不足，当前可用库存为 ${formatQuantity(batch.stockQty)} ${batch.unit || ""}。`;
+  }
+  const advice = buildFefoAdvice(batch, qty);
+  const reason = document.getElementById("issue-override-reason").value.trim();
+  if (advice.reasonRequired && !reason) {
+    return getBatchStatus(batch) === "已过期"
+      ? "当前批次已过期，领取前必须填写原因。"
+      : "当前批次不是 FEFO 推荐批次，请填写原因。";
+  }
+  materialIssueState.qty = qty;
+  materialIssueState.overrideReason = reason;
+  materialIssueState.note = document.getElementById("issue-note").value.trim();
+  return "";
+}
+
+function renderMaterialIssue() {
+  const order = selectedMaterialIssueOrder();
+  const batch = selectedMaterialIssueBatch();
+  const stepIndex = materialIssueSteps.indexOf(materialIssueState.step);
+  const isResult = materialIssueState.step === "result";
+  document.getElementById("material-issue-step-label").textContent = isResult
+    ? "领料结果"
+    : `步骤 ${Math.max(0, stepIndex) + 1} / 4 · ${["确认工单", "确认批次", "填写数量", "最终确认"][Math.max(0, stepIndex)]}`;
+
+  const stepIds = {
+    workOrder: "material-issue-workorder-step",
+    batch: "material-issue-batch-step",
+    input: "material-issue-input-step",
+    confirm: "material-issue-confirm-step",
+    result: "material-issue-result-step",
+  };
+  Object.entries(stepIds).forEach(([step, id]) => {
+    document.getElementById(id).classList.toggle("hidden", materialIssueState.step !== step);
+  });
+
+  const orderFlow = order ? getWorkOrderFlowSummary(order) : null;
+  const orderItems = order
+    ? [
+        ["工单号", order.id],
+        ["产品", order.product || "-"],
+        ["状态", order.status || "-"],
+        ["当前工序", order.currentProcess || "-"],
+        ["计划数量", formatQuantity(order.plannedQty)],
+        ["已报工数量", formatQuantity(orderFlow?.currentTransferableGoodQty || order.doneQty || 0)],
+        ["是否加急", order.priority === "高" ? "是" : "否"],
+        ["交期", order.dueAt || "-"],
+      ]
+    : [];
+  const workOrderSummary = document.getElementById("issue-workorder-summary");
+  workOrderSummary.classList.toggle("hidden", !order);
+  workOrderSummary.innerHTML = order
+    ? `${issueCardGrid(orderItems)}${order.status === "待开始" ? '<div class="issue-notice">工单尚未开始，请确认是否提前领料。</div>' : ""}`
+    : "";
+  document.getElementById("issue-selected-order").innerHTML = order
+    ? `<strong>${escapeHtml(order.id)}</strong><span>${escapeHtml(order.product || "")} · ${escapeHtml(order.status || "")}</span>`
+    : "";
+
+  const batchItems = batch
+    ? [
+        ["物料", batch.name || batch.code],
+        ["物料编号", batch.code],
+        ["批次号", batch.batchNo],
+        ["当前库存", `${formatQuantity(batch.stockQty)} ${batch.unit || ""}`],
+        ["库位", materialIssueState.location || batch.location || "-"],
+        ["来料日期", String(batch.receivedDate || "-").slice(0, 10)],
+        ["到期日期", String(batch.expiryDate || "-").slice(0, 10)],
+        ["批次状态", getBatchStatus(batch)],
+      ]
+    : [];
+  const batchSummary = document.getElementById("issue-batch-summary");
+  batchSummary.classList.toggle("hidden", !batch);
+  batchSummary.innerHTML = batch ? issueCardGrid(batchItems) : "";
+  document.getElementById("issue-input-summary").innerHTML = batch
+    ? `<strong>${escapeHtml(batch.name || batch.code)} · ${escapeHtml(batch.batchNo)}</strong><span>库存 ${formatQuantity(batch.stockQty)} ${escapeHtml(batch.unit || "")} · ${escapeHtml(materialIssueState.location || batch.location || "-")}</span>`
+    : "";
+  document.getElementById("issue-unit").textContent = batch?.unit || "";
+
+  if (batch) {
+    const qty = Number(document.getElementById("issue-qty")?.value || materialIssueState.qty || 0);
+    const advice = buildFefoAdvice(batch, qty);
+    const plan = buildLocalFefoPlan(batch.code, qty);
+    const recommended = plan.recommendedBatch;
+    const fefoPanel = document.getElementById("issue-fefo-panel");
+    fefoPanel.className = `fefo-panel ${advice.reasonRequired ? (getBatchStatus(batch) === "已过期" ? "danger" : "") : "success"}`.trim();
+    fefoPanel.innerHTML = `
+      <strong>${escapeHtml(advice.title)}</strong><br>
+      ${escapeHtml(advice.text)}
+      ${
+        recommended
+          ? `<br>推荐批次：<strong>${escapeHtml(recommended.batchNo)}</strong> · 库存 ${formatQuantity(recommended.stockQty)} ${escapeHtml(recommended.unit || "")} · 到期 ${escapeHtml(String(recommended.expiryDate || "-").slice(0, 10))}`
+          : ""
+      }
+    `;
+    document.getElementById("issue-override-wrap").classList.toggle("hidden", !advice.reasonRequired);
+  }
+
+  if (order && batch && materialIssueState.qty) {
+    const advice = buildFefoAdvice(batch, materialIssueState.qty);
+    document.getElementById("issue-confirm-summary").innerHTML = issueCardGrid([
+      ["工单", order.id],
+      ["产品", order.product || "-"],
+      ["物料", batch.name || batch.code],
+      ["批次", batch.batchNo],
+      ["领料数量", `${formatQuantity(materialIssueState.qty)} ${batch.unit || ""}`],
+      ["库位", materialIssueState.location || batch.location || "-"],
+      ["FEFO", advice.reasonRequired ? "非推荐 / 需原因" : "推荐"],
+      ["原因", materialIssueState.overrideReason || "-"],
+      ["备注", materialIssueState.note || "-"],
+    ]);
+  }
+
+  if (materialIssueState.result) {
+    const result = materialIssueState.result;
+    document.getElementById("issue-result-summary").innerHTML = issueCardGrid([
+      ["工单", result.issue?.workOrderId || materialIssueState.workOrderId],
+      ["物料", result.issue?.materialName || batch?.name || materialIssueState.materialCode],
+      ["批次", result.movement?.batchNo || materialIssueState.batchNo],
+      ["本次领料", `${formatQuantity(result.movement?.qty)} ${result.issue?.unit || batch?.unit || ""}`],
+      ["剩余库存", `${formatQuantity(result.movement?.afterQty)} ${result.issue?.unit || batch?.unit || ""}`],
+      ["操作人", result.issue?.operator || mobileState.currentUser?.name || "-"],
+      ["成功时间", new Date(result.issue?.createdAt || result.movement?.createdAt || Date.now()).toLocaleString("zh-CN")],
+    ]);
+  }
+
+  const footer = document.getElementById("material-issue-footer");
+  footer.classList.toggle("hidden", isResult);
+  const backButton = document.getElementById("issue-back-btn");
+  const nextButton = document.getElementById("issue-next-btn");
+  backButton.textContent = materialIssueState.step === "workOrder" ? "返回首页" : "返回上一步";
+  nextButton.textContent = materialIssueState.step === "confirm" ? (mobileState.materialIssueSubmitting ? "正在领料…" : "确认领料") : "下一步";
+  const canContinue =
+    (materialIssueState.step === "workOrder" && Boolean(order)) ||
+    (materialIssueState.step === "batch" && Boolean(batch)) ||
+    materialIssueState.step === "input" ||
+    materialIssueState.step === "confirm";
+  nextButton.disabled = !canContinue || mobileState.materialIssueSubmitting || mobileState.materialIssueSubmitUnknown;
+  backButton.disabled = mobileState.materialIssueSubmitting;
+  document.getElementById("material-issue-close").disabled = mobileState.materialIssueSubmitting;
+  document.getElementById("material-issue-unknown").classList.toggle("hidden", !mobileState.materialIssueSubmitUnknown);
+
+  document
+    .querySelectorAll("#material-issue-section input, #material-issue-section textarea, #material-issue-section button")
+    .forEach((element) => {
+      if (["issue-next-btn", "issue-back-btn", "material-issue-close", "issue-refresh-check-btn"].includes(element.id)) return;
+      element.disabled = mobileState.materialIssueSubmitting;
+    });
+}
+
 function applyWorkOrderFromUrlQuery() {
   const url = new URL(window.location.href);
   const workOrderValue = url.searchParams.get("workOrder") || url.searchParams.get("order") || url.searchParams.get("workCode");
@@ -648,13 +900,18 @@ function applyBatchFromUrlQuery() {
 }
 
 function cameraElements(target) {
-  const isWorkOrderScan = target === "workOrder";
+  const config = {
+    workOrder: ["workorder-camera-btn", "workorder-stop-btn", "workorder-scan-video", "workorder-camera-wrap"],
+    batch: ["scan-camera-btn", "scan-stop-btn", "scan-video", "scan-camera-wrap"],
+    issueWorkOrder: ["issue-workorder-camera-btn", "issue-workorder-stop-btn", "issue-workorder-video", "issue-workorder-camera-wrap"],
+    issueBatch: ["issue-batch-camera-btn", "issue-batch-stop-btn", "issue-batch-video", "issue-batch-camera-wrap"],
+  }[target] || ["scan-camera-btn", "scan-stop-btn", "scan-video", "scan-camera-wrap"];
   return {
-    isWorkOrderScan,
-    startButton: document.getElementById(isWorkOrderScan ? "workorder-camera-btn" : "scan-camera-btn"),
-    stopButton: document.getElementById(isWorkOrderScan ? "workorder-stop-btn" : "scan-stop-btn"),
-    video: document.getElementById(isWorkOrderScan ? "workorder-scan-video" : "scan-video"),
-    cameraWrap: document.getElementById(isWorkOrderScan ? "workorder-camera-wrap" : "scan-camera-wrap"),
+    isWorkOrderScan: target === "workOrder" || target === "issueWorkOrder",
+    startButton: document.getElementById(config[0]),
+    stopButton: document.getElementById(config[1]),
+    video: document.getElementById(config[2]),
+    cameraWrap: document.getElementById(config[3]),
   };
 }
 
@@ -776,7 +1033,7 @@ async function stopCameraScan(options = {}) {
   scanState.starting = false;
   scanState.target = "";
 
-  ["workOrder", "batch"].forEach((target) => {
+  ["workOrder", "batch", "issueWorkOrder", "issueBatch"].forEach((target) => {
     const { video, cameraWrap } = cameraElements(target);
     cameraWrap.classList.add("hidden");
     cameraWrap.classList.remove("camera-active");
@@ -795,6 +1052,8 @@ async function stopCameraScan(options = {}) {
   if (!options.keepStatus) {
     if (previousTarget === "workOrder") setWorkOrderScanStatus("摄像头已停止。也可以直接粘贴工单码。");
     if (previousTarget === "batch") setScanStatus("摄像头已停止。也可以直接粘贴批次码。");
+    if (previousTarget === "issueWorkOrder") document.getElementById("issue-workorder-status").textContent = "摄像头已停止。也可以手动输入工单码。";
+    if (previousTarget === "issueBatch") document.getElementById("issue-batch-status").textContent = "摄像头已停止。也可以手动输入批次码。";
   }
 }
 
@@ -804,11 +1063,17 @@ async function handleScannedCode(result) {
   if (!value) return;
 
   const target = scanState.target;
-  const ok = target === "workOrder" ? applyWorkOrderCode(value) : applyBatchCode(value);
+  const handler = {
+    workOrder: applyWorkOrderCode,
+    batch: applyBatchCode,
+    issueWorkOrder: applyMaterialIssueWorkOrder,
+    issueBatch: applyMaterialIssueBatch,
+  }[target];
+  const ok = handler?.(value);
   if (!ok) {
     if (target === "workOrder") {
       setWorkOrderScanStatus("二维码已识别，但不是本系统的工单码，请更换二维码。");
-    } else {
+    } else if (target === "batch") {
       setScanStatus("二维码已识别，但不是本系统的物料批次码，请更换二维码。");
     }
     return;
@@ -817,8 +1082,12 @@ async function handleScannedCode(result) {
   await stopCameraScan({ keepStatus: true });
   if (target === "workOrder") {
     setWorkOrderScanStatus("已识别二维码，工单已带入，可直接报工。");
-  } else {
+  } else if (target === "batch") {
     setScanStatus("已识别二维码，批次已带入，可直接提交出入库。");
+  } else if (target === "issueWorkOrder") {
+    document.getElementById("issue-workorder-status").textContent = "工单识别成功，请确认后进入下一步。";
+  } else if (target === "issueBatch") {
+    document.getElementById("issue-batch-status").textContent = "物料批次识别成功，请确认后进入下一步。";
   }
   showToast("二维码识别成功");
 }
@@ -836,7 +1105,9 @@ async function startCameraScan(target = "batch") {
   if (scanState.starting || (scanState.active && scanState.target === target)) return;
   if (!navigator.mediaDevices?.getUserMedia) {
     const message = window.isSecureContext ? "当前浏览器不支持摄像头扫码，请手动输入二维码内容。" : "当前环境无法访问摄像头，请确认使用 HTTPS 打开系统。";
-    target === "workOrder" ? setWorkOrderScanStatus(message) : setScanStatus(message);
+    if (target === "workOrder") setWorkOrderScanStatus(message);
+    else if (target === "batch") setScanStatus(message);
+    else document.getElementById(target === "issueWorkOrder" ? "issue-workorder-status" : "issue-batch-status").textContent = message;
     return;
   }
 
@@ -848,7 +1119,9 @@ async function startCameraScan(target = "batch") {
   updateCameraButtons(target, "starting");
   const { isWorkOrderScan, video, cameraWrap } = cameraElements(target);
   const startingMessage = "正在启动摄像头，请稍候…";
-  isWorkOrderScan ? setWorkOrderScanStatus(startingMessage) : setScanStatus(startingMessage);
+  if (target === "workOrder") setWorkOrderScanStatus(startingMessage);
+  else if (target === "batch") setScanStatus(startingMessage);
+  else document.getElementById(target === "issueWorkOrder" ? "issue-workorder-status" : "issue-batch-status").textContent = startingMessage;
   let scanner = null;
 
   try {
@@ -877,10 +1150,13 @@ async function startCameraScan(target = "batch") {
     scanState.starting = false;
     scanState.active = true;
     updateCameraButtons(target, "active");
-    if (isWorkOrderScan) {
+    if (target === "workOrder") {
       setWorkOrderScanStatus("摄像头已开启，请将工单二维码完整放入取景框。");
-    } else {
+    } else if (target === "batch") {
       setScanStatus("摄像头已开启，请将物料批次二维码完整放入取景框。");
+    } else {
+      document.getElementById(target === "issueWorkOrder" ? "issue-workorder-status" : "issue-batch-status").textContent =
+        `摄像头已开启，请将${isWorkOrderScan ? "工单" : "物料批次"}二维码完整放入取景框。`;
     }
   } catch (error) {
     const isCurrentRequest = requestId === scanState.requestId;
@@ -899,19 +1175,22 @@ async function startCameraScan(target = "batch") {
     const message = cameraErrorMessage(error);
     if (target === "workOrder") {
       setWorkOrderScanStatus(message);
-    } else {
+    } else if (target === "batch") {
       setScanStatus(message);
+    } else {
+      document.getElementById(target === "issueWorkOrder" ? "issue-workorder-status" : "issue-batch-status").textContent = message;
     }
   }
 }
 
 function renderAll() {
   applyRoleMode();
-  if (!mobileState.currentUser || mobileState.currentUser.role === "manager") return;
+  if (!mobileState.currentUser) return;
   renderSummary();
   renderTasks();
   renderReportForm();
   renderStockForm();
+  renderMaterialIssue();
 }
 
 async function loadState() {
@@ -924,16 +1203,17 @@ async function loadState() {
 async function loadSession() {
   const result = await api("/api/me");
   mobileState.currentUser = result.user;
-  if (result.user.role === "manager") {
-    handoffToAdmin();
-    return;
-  }
   renderUser();
   await loadState();
 }
 
 function logout() {
+  if (mobileState.materialIssueSubmitting) {
+    showToast("领料正在提交，请等待结果");
+    return;
+  }
   closeWorkflowSheet();
+  resetMaterialIssue();
   clearToken();
   mobileState.currentUser = null;
   mobileState.data = null;
@@ -952,7 +1232,7 @@ function scrollToTarget(targetId) {
 }
 
 function setActiveQuickAction(action) {
-  ["action-primary", "action-secondary", "action-tertiary"].forEach((id) => {
+  ["action-primary", "action-secondary", "action-tertiary", "action-material-issue"].forEach((id) => {
     const button = document.getElementById(id);
     button.classList.toggle("primary-action", button.getAttribute("data-action") === action);
   });
@@ -985,37 +1265,47 @@ function openWorkflowSheet(kind, options = {}) {
   void stopCameraScan({ keepStatus: true });
   const reportSheet = document.getElementById("report-section");
   const stockSheet = document.getElementById("stock-section");
+  const materialIssueSheet = document.getElementById("material-issue-section");
   const isReport = kind === "report";
+  const isStock = kind === "stock";
+  const isMaterialIssue = kind === "materialIssue";
 
-  if (!isReport && options.stockType) {
+  if (isStock && options.stockType) {
     document.getElementById("stock-type").value = options.stockType;
     updateStockMode();
   }
 
   reportSheet.classList.toggle("open", isReport);
-  stockSheet.classList.toggle("open", !isReport);
+  stockSheet.classList.toggle("open", isStock);
+  materialIssueSheet.classList.toggle("open", isMaterialIssue);
   reportSheet.setAttribute("aria-hidden", String(!isReport));
-  stockSheet.setAttribute("aria-hidden", String(isReport));
+  stockSheet.setAttribute("aria-hidden", String(!isStock));
+  materialIssueSheet.setAttribute("aria-hidden", String(!isMaterialIssue));
   document.getElementById("sheet-backdrop").classList.remove("hidden");
   lockPageScroll();
   window.setTimeout(() => {
-    const sheet = isReport ? reportSheet : stockSheet;
+    const sheet = isReport ? reportSheet : isStock ? stockSheet : materialIssueSheet;
     sheet.querySelector(".workflow-sheet-body").scrollTop = 0;
   }, 40);
 
   if (isReport) {
     setActiveQuickAction("scan-work");
     setActiveBottomNav("nav-two");
-  } else {
+  } else if (isStock) {
     const action = document.getElementById("stock-type").value === "out" ? "stock-out" : "stock-in";
     setActiveQuickAction(action);
     setActiveBottomNav("nav-three");
+  } else {
+    setActiveQuickAction("material-issue");
+    setActiveBottomNav("nav-one");
+    renderMaterialIssue();
   }
 }
 
 function closeWorkflowSheet() {
+  if (mobileState.materialIssueSubmitting) return;
   void stopCameraScan({ keepStatus: true });
-  ["report-section", "stock-section"].forEach((id) => {
+  ["report-section", "stock-section", "material-issue-section"].forEach((id) => {
     const sheet = document.getElementById(id);
     sheet.classList.remove("open");
     sheet.setAttribute("aria-hidden", "true");
@@ -1023,6 +1313,101 @@ function closeWorkflowSheet() {
   document.getElementById("sheet-backdrop").classList.add("hidden");
   unlockPageScroll();
   setActiveBottomNav("nav-one");
+}
+
+async function submitMaterialIssue() {
+  if (mobileState.materialIssueSubmitting || mobileState.materialIssueSubmitUnknown) return;
+  const order = selectedMaterialIssueOrder();
+  const batch = selectedMaterialIssueBatch();
+  if (!order || !batch || !materialIssueState.qty) {
+    setMaterialIssueError("领料信息不完整，请返回检查。");
+    return;
+  }
+
+  mobileState.materialIssueSubmitting = true;
+  setMaterialIssueError("");
+  await stopCameraScan({ keepStatus: true });
+  renderMaterialIssue();
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  try {
+    const result = await api(`/api/work-orders/${encodeURIComponent(order.id)}/material-issues`, {
+      method: "POST",
+      signal: controller.signal,
+      body: JSON.stringify({
+        materialCode: batch.code,
+        batchNo: batch.batchNo,
+        qty: materialIssueState.qty,
+        location: materialIssueState.location || batch.location || "",
+        overrideReason: materialIssueState.overrideReason,
+        note: materialIssueState.note,
+        operator: "前端值必须被服务端忽略",
+      }),
+    });
+    mobileState.data = result.state;
+    materialIssueState.result = result;
+    materialIssueState.step = "result";
+    mobileState.materialIssueSubmitting = false;
+    mobileState.materialIssueSubmitUnknown = false;
+    renderAll();
+    showToast("领料成功");
+  } catch (error) {
+    mobileState.materialIssueSubmitting = false;
+    const isUnknownResult = !error.status || error.name === "AbortError";
+    if (isUnknownResult) {
+      mobileState.materialIssueSubmitUnknown = true;
+      setMaterialIssueError("提交结果未知，请先刷新库存和最近流水确认。");
+    } else {
+      setMaterialIssueError(error.status === 401 ? "登录状态已失效，请重新登录。" : error.status === 403 ? "当前账号没有工单领料权限。" : error.message);
+    }
+    renderMaterialIssue();
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function refreshUnknownMaterialIssue() {
+  if (!mobileState.materialIssueSubmitUnknown) return;
+  const button = document.getElementById("issue-refresh-check-btn");
+  button.disabled = true;
+  button.textContent = "正在刷新…";
+  try {
+    const nextData = await api("/api/state");
+    mobileState.data = nextData;
+    const movement = (nextData.stockMovements || []).find(
+      (item) =>
+        item.workOrderId === materialIssueState.workOrderId &&
+        item.materialCode === materialIssueState.materialCode &&
+        item.batchNo === materialIssueState.batchNo &&
+        Number(item.qty) === Number(materialIssueState.qty) &&
+        item.operator === mobileState.currentUser?.name &&
+        item.type === "out"
+    );
+    if (movement) {
+      materialIssueState.result = {
+        movement,
+        issue: {
+          workOrderId: materialIssueState.workOrderId,
+          materialName: selectedMaterialIssueBatch()?.name || materialIssueState.materialCode,
+          unit: selectedMaterialIssueBatch()?.unit || "",
+          operator: movement.operator,
+          createdAt: movement.createdAt,
+        },
+      };
+      materialIssueState.step = "result";
+      mobileState.materialIssueSubmitUnknown = false;
+      setMaterialIssueError("");
+      renderAll();
+      return;
+    }
+    setMaterialIssueError("刷新后未能确认本次领料结果，请联系管理员核对，暂时不要重复提交。");
+    renderAll();
+  } catch {
+    setMaterialIssueError("网络连接失败，表单已保留。");
+  } finally {
+    button.disabled = false;
+    button.textContent = "刷新并核对";
+  }
 }
 
 function bindEvents() {
@@ -1049,10 +1434,6 @@ function bindEvents() {
       });
       localStorage.setItem(tokenKey, result.token);
       mobileState.currentUser = result.user;
-      if (result.user.role === "manager") {
-        handoffToAdmin(result.token);
-        return;
-      }
       setLoggedIn(true);
       renderUser();
       await loadState();
@@ -1062,6 +1443,77 @@ function bindEvents() {
   });
 
   document.getElementById("logout-btn").addEventListener("click", logout);
+  document.getElementById("admin-link").addEventListener("click", () => {
+    if (token()) localStorage.setItem(adminTokenKey, token());
+  });
+
+  document.getElementById("action-material-issue").addEventListener("click", () => {
+    if (!["manager", "worker"].includes(mobileState.currentUser?.role)) {
+      showToast("当前账号没有工单领料权限");
+      return;
+    }
+    if (!mobileState.materialIssueSubmitUnknown) resetMaterialIssue();
+    openWorkflowSheet("materialIssue");
+  });
+
+  document.getElementById("issue-workorder-apply-btn").addEventListener("click", () => {
+    applyMaterialIssueWorkOrder(document.getElementById("issue-workorder-input").value);
+  });
+  document.getElementById("issue-batch-apply-btn").addEventListener("click", () => {
+    applyMaterialIssueBatch(document.getElementById("issue-batch-input").value);
+  });
+  document.getElementById("issue-workorder-camera-btn").addEventListener("click", () => void startCameraScan("issueWorkOrder"));
+  document.getElementById("issue-workorder-stop-btn").addEventListener("click", () => void stopCameraScan());
+  document.getElementById("issue-batch-camera-btn").addEventListener("click", () => void startCameraScan("issueBatch"));
+  document.getElementById("issue-batch-stop-btn").addEventListener("click", () => void stopCameraScan());
+  document.getElementById("issue-qty").addEventListener("input", renderMaterialIssue);
+  document.getElementById("issue-next-btn").addEventListener("click", async () => {
+    if (materialIssueState.step === "workOrder") {
+      if (!selectedMaterialIssueOrder()) {
+        applyMaterialIssueWorkOrder(document.getElementById("issue-workorder-input").value);
+        return;
+      }
+      setMaterialIssueStep("batch");
+      return;
+    }
+    if (materialIssueState.step === "batch") {
+      if (!selectedMaterialIssueBatch()) {
+        applyMaterialIssueBatch(document.getElementById("issue-batch-input").value);
+        return;
+      }
+      setMaterialIssueStep("input");
+      return;
+    }
+    if (materialIssueState.step === "input") {
+      const validationError = validateMaterialIssueInput();
+      if (validationError) {
+        setMaterialIssueError(validationError);
+        renderMaterialIssue();
+        return;
+      }
+      setMaterialIssueError("");
+      setMaterialIssueStep("confirm");
+      return;
+    }
+    if (materialIssueState.step === "confirm") await submitMaterialIssue();
+  });
+  document.getElementById("issue-back-btn").addEventListener("click", () => {
+    if (mobileState.materialIssueSubmitting) return;
+    if (materialIssueState.step === "workOrder") {
+      closeWorkflowSheet();
+      return;
+    }
+    const previous = { batch: "workOrder", input: "batch", confirm: "input" }[materialIssueState.step];
+    if (previous) setMaterialIssueStep(previous);
+  });
+  document.getElementById("material-issue-close").addEventListener("click", closeWorkflowSheet);
+  document.getElementById("issue-continue-btn").addEventListener("click", () => resetMaterialIssue({ keepOrder: true }));
+  document.getElementById("issue-restart-btn").addEventListener("click", () => resetMaterialIssue());
+  document.getElementById("issue-home-btn").addEventListener("click", () => {
+    resetMaterialIssue();
+    closeWorkflowSheet();
+  });
+  document.getElementById("issue-refresh-check-btn").addEventListener("click", () => void refreshUnknownMaterialIssue());
 
   document.getElementById("action-primary").addEventListener("click", async () => {
     const action = document.getElementById("action-primary").getAttribute("data-action");
@@ -1227,6 +1679,8 @@ function bindEvents() {
 
   updateCameraButtons("workOrder", "idle");
   updateCameraButtons("batch", "idle");
+  updateCameraButtons("issueWorkOrder", "idle");
+  updateCameraButtons("issueBatch", "idle");
 
   document.getElementById("stock-form").addEventListener("submit", async (event) => {
     event.preventDefault();

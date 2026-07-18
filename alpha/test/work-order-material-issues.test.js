@@ -22,7 +22,7 @@ async function withTestStore(run) {
   }
 }
 
-async function createOrder(store, suffix = "001") {
+async function createOrder(store, suffix = "001", status = "待领料") {
   return store.createWorkOrder({
     id: `WO-ISSUE-${suffix}`,
     product: "领料追溯测试鞋垫",
@@ -30,7 +30,7 @@ async function createOrder(store, suffix = "001") {
     doneQty: 0,
     currentProcess: "备料",
     priority: "中",
-    status: "待领料",
+    status,
     route: [{ name: "备料", status: "待开始" }],
     operator: "测试管理员",
   });
@@ -136,6 +136,77 @@ test("manual work order issue rejects missing records, invalid quantities, and w
     await assert.rejects(
       () => store.createWorkOrderMaterialIssue(order.workOrder.id, { materialCode: "RM-ISSUE-A", batchNo: "BATCH-A", qty: 2.01, operator: "测试管理员" }),
       /出库数量不能大于当前库存/
+    );
+    await assert.rejects(
+      () => store.createWorkOrderMaterialIssue(order.workOrder.id, { materialCode: "RM-ISSUE-A", batchNo: "BATCH-A", qty: Number.POSITIVE_INFINITY, operator: "测试管理员" }),
+      /出入库数量必须大于 0/
+    );
+  });
+});
+
+test("work order material issue uses an allowlist for current work order status", async () => {
+  await withTestStore(async (store) => {
+    await createMaterial(store, "RM-ISSUE-STATUS");
+    await createBatch(store, { materialCode: "RM-ISSUE-STATUS", batchNo: "STATUS-BATCH", initialQty: 20 });
+
+    for (const [index, status] of ["待领料", "待开始", "生产中"].entries()) {
+      const order = await createOrder(store, `ALLOW-${index}`, status);
+      const result = await store.createWorkOrderMaterialIssue(order.workOrder.id, {
+        materialCode: "RM-ISSUE-STATUS",
+        batchNo: "STATUS-BATCH",
+        qty: 1,
+        operator: "测试管理员",
+      });
+      assert.equal(result.issue.workOrderId, order.workOrder.id);
+    }
+
+    for (const [index, status] of ["已暂停", "已完成", "未来状态"].entries()) {
+      const order = await createOrder(store, `DENY-${index}`, status);
+      await assert.rejects(
+        () =>
+          store.createWorkOrderMaterialIssue(order.workOrder.id, {
+            materialCode: "RM-ISSUE-STATUS",
+            batchNo: "STATUS-BATCH",
+            qty: 1,
+            operator: "测试管理员",
+          }),
+        /当前工单状态不允许领料/
+      );
+    }
+  });
+});
+
+test("work order issue subtraction keeps decimal inventory exact", async () => {
+  await withTestStore(async (store) => {
+    const order = await createOrder(store, "DECIMAL");
+    await createMaterial(store, "RM-ISSUE-DECIMAL");
+    await createBatch(store, { materialCode: "RM-ISSUE-DECIMAL", batchNo: "DECIMAL-BATCH", initialQty: 1 });
+    const result = await store.createWorkOrderMaterialIssue(order.workOrder.id, {
+      materialCode: "RM-ISSUE-DECIMAL",
+      batchNo: "DECIMAL-BATCH",
+      qty: 0.8,
+      operator: "测试管理员",
+    });
+    assert.equal(result.movement.afterQty, 0.2);
+    assert.equal(result.state.materialBatches.find((item) => item.batchNo === "DECIMAL-BATCH").stockQty, 0.2);
+  });
+});
+
+test("work order issue checks the latest status at submit time", async () => {
+  await withTestStore(async (store) => {
+    const order = await createOrder(store, "LATEST-STATUS", "生产中");
+    await createMaterial(store, "RM-ISSUE-LATEST");
+    await createBatch(store, { materialCode: "RM-ISSUE-LATEST", batchNo: "LATEST-BATCH", initialQty: 1 });
+    await store.updateWorkOrder(order.workOrder.id, { status: "已暂停", operator: "测试管理员" });
+    await assert.rejects(
+      () =>
+        store.createWorkOrderMaterialIssue(order.workOrder.id, {
+          materialCode: "RM-ISSUE-LATEST",
+          batchNo: "LATEST-BATCH",
+          qty: 0.1,
+          operator: "测试管理员",
+        }),
+      /当前工单状态不允许领料/
     );
   });
 });

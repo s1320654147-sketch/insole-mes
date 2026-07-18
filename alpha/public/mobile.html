@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>鞋垫工厂移动端 Alpha</title>
-    <link rel="stylesheet" href="./mobile.css?v=20260716-camera-preview-2" />
+    <link rel="stylesheet" href="./mobile.css?v=20260718-material-issue" />
   </head>
   <body>
     <div class="login-screen" id="login-screen">
@@ -32,7 +32,7 @@
         </div>
         <div class="header-actions">
           <div class="user-pill" id="current-user">未登录</div>
-          <a class="header-link" id="admin-link" href="./admin.html">管理端</a>
+          <a class="header-link" id="admin-link" href="./admin.html">进入管理端</a>
           <button class="header-link" id="logout-btn" type="button">退出</button>
         </div>
       </header>
@@ -45,6 +45,7 @@
             <button class="action-button primary-action" id="action-primary" data-action="scan-work">扫码接单</button>
             <button class="action-button" id="action-secondary" data-action="exception">异常上报</button>
             <button class="action-button" id="action-tertiary" data-action="stock-in">扫码入库</button>
+            <button class="action-button" id="action-material-issue" data-action="material-issue">工单领料</button>
           </section>
 
           <section class="summary-strip" id="summary-strip"></section>
@@ -179,6 +180,117 @@
           </form>
           </div>
         </section>
+
+        <section class="workflow-sheet material-issue-sheet" id="material-issue-section" aria-hidden="true">
+          <div class="workflow-sheet-head">
+            <div>
+              <h2>工单领料</h2>
+              <span id="material-issue-step-label">步骤 1 / 4 · 确认工单</span>
+            </div>
+            <button class="sheet-close" id="material-issue-close" type="button" aria-label="关闭工单领料">×</button>
+          </div>
+          <div class="workflow-sheet-body material-issue-body">
+            <div class="material-issue-step" id="material-issue-workorder-step">
+              <div class="step-heading">
+                <strong>扫描或输入工单</strong>
+                <span>支持工单原始码和标签二维码链接</span>
+              </div>
+              <div class="scan-actions">
+                <button class="ghost-inline" id="issue-workorder-camera-btn" type="button">启动摄像头</button>
+                <button class="ghost-inline" id="issue-workorder-stop-btn" type="button">停止扫码</button>
+              </div>
+              <label>
+                工单码 / 二维码内容
+                <input id="issue-workorder-input" type="text" autocomplete="off" placeholder="WO|WO-XXXX|当前工序 或完整扫码链接" />
+              </label>
+              <button class="secondary-submit" id="issue-workorder-apply-btn" type="button">确认工单</button>
+              <div class="scan-status" id="issue-workorder-status">请扫描工单二维码，也可以手动输入。</div>
+              <div class="camera-wrap hidden" id="issue-workorder-camera-wrap">
+                <video id="issue-workorder-video" autoplay playsinline webkit-playsinline muted></video>
+              </div>
+              <div class="issue-card hidden" id="issue-workorder-summary"></div>
+            </div>
+
+            <div class="material-issue-step hidden" id="material-issue-batch-step">
+              <div class="step-heading">
+                <strong>扫描或输入物料批次</strong>
+                <span>批次按物料编号和批次号精确识别</span>
+              </div>
+              <div class="issue-card compact" id="issue-selected-order"></div>
+              <div class="scan-actions">
+                <button class="ghost-inline" id="issue-batch-camera-btn" type="button">启动摄像头</button>
+                <button class="ghost-inline" id="issue-batch-stop-btn" type="button">停止扫码</button>
+              </div>
+              <label>
+                物料批次码 / 二维码内容
+                <input id="issue-batch-input" type="text" autocomplete="off" placeholder="MAT|RM-001|BATCH-001|A-01 或完整扫码链接" />
+              </label>
+              <button class="secondary-submit" id="issue-batch-apply-btn" type="button">确认物料批次</button>
+              <div class="scan-status" id="issue-batch-status">请扫描物料批次二维码，也可以手动输入。</div>
+              <div class="camera-wrap hidden" id="issue-batch-camera-wrap">
+                <video id="issue-batch-video" autoplay playsinline webkit-playsinline muted></video>
+              </div>
+              <div class="issue-card hidden" id="issue-batch-summary"></div>
+            </div>
+
+            <div class="material-issue-step hidden" id="material-issue-input-step">
+              <div class="step-heading">
+                <strong>填写领料信息</strong>
+                <span>库存和 FEFO 将在提交时由服务端重新校验</span>
+              </div>
+              <div class="issue-card compact" id="issue-input-summary"></div>
+              <label>
+                领料数量
+                <div class="quantity-input-row">
+                  <input id="issue-qty" type="number" min="0" step="any" inputmode="decimal" autocomplete="off" placeholder="请输入大于 0 的数量" />
+                  <strong id="issue-unit"></strong>
+                </div>
+              </label>
+              <div class="fefo-panel" id="issue-fefo-panel"></div>
+              <label class="hidden" id="issue-override-wrap">
+                非推荐 / 过期领料原因
+                <textarea id="issue-override-reason" rows="2" autocomplete="off" placeholder="请填写使用当前批次的原因"></textarea>
+              </label>
+              <label>
+                备注（选填）
+                <textarea id="issue-note" rows="2" autocomplete="off" placeholder="例如：生产线补充领料"></textarea>
+              </label>
+            </div>
+
+            <div class="material-issue-step hidden" id="material-issue-confirm-step">
+              <div class="step-heading">
+                <strong>确认领料</strong>
+                <span>请核对工单、批次和数量</span>
+              </div>
+              <div class="issue-card" id="issue-confirm-summary"></div>
+            </div>
+
+            <div class="material-issue-step hidden" id="material-issue-result-step">
+              <div class="issue-result-mark">✓</div>
+              <div class="step-heading centered">
+                <strong>领料成功</strong>
+                <span>库存和工单领料记录已经同步</span>
+              </div>
+              <div class="issue-card" id="issue-result-summary"></div>
+              <div class="issue-result-actions">
+                <button class="submit-button" id="issue-continue-btn" type="button">继续为当前工单领料</button>
+                <button class="secondary-submit" id="issue-restart-btn" type="button">重新扫描工单</button>
+                <button class="text-button" id="issue-home-btn" type="button">返回首页</button>
+              </div>
+            </div>
+
+            <div class="material-issue-unknown hidden" id="material-issue-unknown">
+              <strong>提交结果未知</strong>
+              <p>请先刷新库存和最近流水确认，不要直接重复提交。</p>
+              <button class="secondary-submit" id="issue-refresh-check-btn" type="button">刷新并核对</button>
+            </div>
+            <div class="form-error hidden" id="material-issue-error"></div>
+          </div>
+          <div class="material-issue-footer" id="material-issue-footer">
+            <button class="ghost-inline" id="issue-back-btn" type="button">返回首页</button>
+            <button class="submit-button" id="issue-next-btn" type="button">下一步</button>
+          </div>
+        </section>
       </main>
 
       <button class="sheet-backdrop hidden" id="sheet-backdrop" type="button" aria-label="关闭操作面板"></button>
@@ -192,6 +304,6 @@
       <div class="toast" id="toast">已提交</div>
     </div>
 
-    <script type="module" src="./mobile.js?v=20260716-camera-preview-2"></script>
+    <script type="module" src="./mobile.js?v=20260718-material-issue"></script>
   </body>
 </html>

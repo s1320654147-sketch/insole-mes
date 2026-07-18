@@ -50,6 +50,19 @@ function addDecimalQuantities(left, right) {
   return sumDecimalQuantities([left, right]);
 }
 
+export const workOrderMaterialIssueAllowedStatuses = Object.freeze([
+  "待领料",
+  "待开始",
+  "生产中",
+]);
+
+export function assertWorkOrderMaterialIssueStatus(order = {}) {
+  const status = String(order.status || "").trim();
+  if (!workOrderMaterialIssueAllowedStatuses.includes(status)) {
+    throw createStoreError("WORK_ORDER_STATUS_NOT_ALLOWED", `当前工单状态不允许领料：${status || "未知状态"}`);
+  }
+}
+
 function requireMaterialBatchId(value) {
   const id = String(value ?? "").trim();
   if (!id || id.length > 200 || id.includes("/")) {
@@ -1263,6 +1276,7 @@ async function createFileStore(rootDir) {
       const state = await readState();
       const order = state.workOrders.find((item) => item.id === workOrderId);
       if (!order) throw new Error("工单不存在");
+      assertWorkOrderMaterialIssueStatus(order);
 
       const issueInput = normalizeWorkOrderMaterialIssueInput(workOrderId, input);
       if (!issueInput.operator) throw new Error("操作人不能为空");
@@ -1275,7 +1289,7 @@ async function createFileStore(rootDir) {
       assertStockMovementInput(movementInput, batch.stockQty);
       const fefoPlan = assertFefoStockMovement(movementInput, batch, state);
       const beforeQty = Number(batch.stockQty || 0);
-      const afterQty = beforeQty - movementInput.qty;
+      const afterQty = addDecimalQuantities(beforeQty, -movementInput.qty);
       const createdAt = new Date().toISOString();
       const movement = {
         id: makeId("stk"),
@@ -1928,9 +1942,10 @@ async function createPostgresStore() {
       const client = await pool.connect();
       try {
         await client.query("begin");
-        const orderResult = await client.query("select id, product from work_orders where id=$1 for update", [workOrderId]);
+        const orderResult = await client.query("select id, product, status from work_orders where id=$1 for update", [workOrderId]);
         const order = orderResult.rows[0];
         if (!order) throw new Error("工单不存在");
+        assertWorkOrderMaterialIssueStatus(order);
 
         const issueInput = normalizeWorkOrderMaterialIssueInput(workOrderId, input);
         if (!issueInput.operator) throw new Error("操作人不能为空");
@@ -1957,7 +1972,7 @@ async function createPostgresStore() {
         const stateForFefo = await readPostgresState(client);
         const fefoPlan = assertFefoStockMovement(movementInput, batch, stateForFefo);
         const beforeQty = batch.stockQty;
-        const afterQty = beforeQty - movementInput.qty;
+        const afterQty = addDecimalQuantities(beforeQty, -movementInput.qty);
         const createdAt = new Date().toISOString();
         const movement = {
           id: makeId("stk"),
